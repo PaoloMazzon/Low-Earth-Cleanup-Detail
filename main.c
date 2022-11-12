@@ -2,6 +2,8 @@
 #include <SDL2/SDL.h>
 #include <VK2D/VK2D.h>
 
+#define ASSETS_IMPLEMENTATION
+#include "Assets.h"
 #include "JamUtil/JamUtil.h"
 
 /********************* Types *********************/
@@ -10,6 +12,9 @@ typedef double real;
 /********************* Constants **********************/
 int WINDOW_WIDTH = 800;
 int WINDOW_HEIGHT = 600;
+
+/********************* Globals *********************/
+Assets *gAssets = NULL;
 
 /********************* Main *********************/
 int main() {
@@ -25,6 +30,7 @@ int main() {
 	double average = 1;
 	JUClock framerateTimer;
 	juClockReset(&framerateTimer);
+	gAssets = buildAssets();
 
 	while (!stopRunning) {
 		juUpdate();
@@ -50,7 +56,7 @@ int main() {
 	}
 
 	vk2dRendererWait();
-
+	destroyAssets(gAssets);
 	juQuit();
 	vk2dRendererQuit();
 	SDL_DestroyWindow(window);
