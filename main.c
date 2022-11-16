@@ -16,25 +16,38 @@ typedef enum {
 } gamestate;
 
 /********************* Constants **********************/
-const int WINDOW_WIDTH = 1024;
+const int WINDOW_WIDTH  = 1024;
 const int WINDOW_HEIGHT = 768;
-const int GAME_WIDTH = 1500;
-const int GAME_HEIGHT = 1125;
-const real FPS_LIMIT = 60;
-const real WORLD_MAX_WIDTH = 6000;
-const real WORLD_MAX_HEIGHT = 6000;
+const int GAME_WIDTH    = 1500;
+const int GAME_HEIGHT   = 1125;
+const real FPS_LIMIT    = 60;
+const real ZOOM_MIN     = 0.5;
+const real ZOOM_MAX     = 2;
+const real ZOOM_SPEED   = 0.25;
+
+const real WORLD_MAX_WIDTH  = 60000;
+const real WORLD_MAX_HEIGHT = 60000;
+
+const real SUN_POS_X = 400;
+const real SUN_POS_Y = 400;
+
 const real PLAYER_START_X = WORLD_MAX_WIDTH / 2;
 const real PLAYER_START_Y = WORLD_MAX_HEIGHT / 2;
-const real PLAYER_BASE_ROTATE_SPEED = VK2D_PI / 120;
+
+const real PLAYER_BASE_ROTATE_ACCELERATION = VK2D_PI * 0.003;
+const real PLAYER_BASE_ROTATE_FRICTION     = VK2D_PI * 0.001;
+const real PLAYER_BASE_ROTATE_TOP_SPEED    = VK2D_PI * 0.02;
+
 const real PLAYER_BASE_ACCELERATION = 0.05;
-const real PLAYER_BASE_TOP_SPEED = 15;
-const real PLAYER_FRICTION = 0.02;
+const real PLAYER_BASE_TOP_SPEED    = 15;
+const real PLAYER_FRICTION          = 0.02;
 
 /********************* Structs **********************/
 typedef struct {
 	real x;
 	real y;
 	real dir;
+	real dirVelocity;
 	real velocity;
 } Player;
 
@@ -42,6 +55,7 @@ typedef struct {
 Assets *gAssets = NULL;
 VK2DCameraIndex gCam = -1;
 Player gPlayer = {};
+real gZoom = 1;
 
 /********************* Common functions *********************/
 void drawTiledBackground(VK2DTexture texture, float rate) {
@@ -49,9 +63,11 @@ void drawTiledBackground(VK2DTexture texture, float rate) {
 
 	// Figure out how many tiles we need to draw and where to start drawing
 	float tileStartX = camera.x * rate;
-	while (tileStartX + texture->img->width < camera.x) tileStartX += texture->img->width;
 	float tileStartY = camera.y * rate;
-	while (tileStartY + texture->img->height < camera.y) tileStartY += texture->img->height;
+	tileStartX += floorf((camera.x - tileStartX) / texture->img->width) * texture->img->width;
+	tileStartY += floorf((camera.y - tileStartY) / texture->img->height) * texture->img->height;
+	//while (tileStartX + texture->img->width < camera.x) tileStartX += texture->img->width;
+	//while (tileStartY + texture->img->height < camera.y) tileStartY += texture->img->height;
 	float tilesNeededHorizontal = ceilf(camera.w / texture->img->width) + 1;
 	float tilesNeededVertical = ceilf(camera.h / texture->img->height) + 1;
 
@@ -65,12 +81,21 @@ void drawTiledBackground(VK2DTexture texture, float rate) {
 void playerStart() {
 	gPlayer.x = PLAYER_START_X;
 	gPlayer.y = PLAYER_START_Y;
-	gPlayer.dir = gPlayer.velocity = 0;
+	gPlayer.dir = gPlayer.velocity = gPlayer.dirVelocity = 0;
 }
 
 void playerUpdate() {
 	// Rotate the ship
-	gPlayer.dir += (-((real)juKeyboardGetKey(SDL_SCANCODE_A)) + ((real)juKeyboardGetKey(SDL_SCANCODE_D))) * PLAYER_BASE_ROTATE_SPEED;
+	if (juKeyboardGetKey(SDL_SCANCODE_A) || juKeyboardGetKey(SDL_SCANCODE_D)) {
+		gPlayer.dirVelocity += (-((real) juKeyboardGetKey(SDL_SCANCODE_A)) + ((real) juKeyboardGetKey(SDL_SCANCODE_D))) * PLAYER_BASE_ROTATE_ACCELERATION;
+	} else {
+		if (juSign(gPlayer.dirVelocity - juSign(gPlayer.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION) != juSign(gPlayer.dirVelocity))
+			gPlayer.dirVelocity = 0;
+		else
+			gPlayer.dirVelocity -= juSign(gPlayer.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION;
+	}
+	gPlayer.dirVelocity = juClamp(gPlayer.dirVelocity, -PLAYER_BASE_ROTATE_TOP_SPEED, PLAYER_BASE_ROTATE_TOP_SPEED);
+	gPlayer.dir += gPlayer.dirVelocity;
 
 	// Accelerate the ship
 	if (juKeyboardGetKey(SDL_SCANCODE_SPACE))
@@ -118,7 +143,9 @@ gamestate gameUpdate() {
 
 	// Draw world
 	vk2dRendererLockCameras(gCam);
-	drawTiledBackground(gAssets->texBackground, 0.7);
+	vk2dDrawTexture(gAssets->texSun, spec.x + SUN_POS_X - spec.x * 0.05, spec.y + SUN_POS_Y - spec.y * 0.05);
+	drawTiledBackground(gAssets->texBackground, 0.8);
+	drawTiledBackground(gAssets->texMidground, 0.6);
 	drawTiledBackground(gAssets->texForeground, 0.5);
 	playerDraw();
 	vk2dRendererUnlockCameras();
@@ -151,7 +178,7 @@ int main() {
 	VK2DRendererConfig config = {msaa_32x, sm_TripleBuffer, ft_Nearest};
 	juInit(window, 3, 1);
 	vk2dRendererInit(window, config);
-	vec4 clearColour = {0, 0, 0, 1}; // Black
+	vec4 clearColour = {0, 0, 13.0/255.0, 1}; // Black
 	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
 	bool stopRunning = false;
 	double totalTime = 0;
@@ -176,14 +203,18 @@ int main() {
 			}
 		}
 
+		// Handle zoom
+		gZoom += (((real) juKeyboardGetKeyPressed(SDL_SCANCODE_Q)) - ((real) juKeyboardGetKeyPressed(SDL_SCANCODE_E))) * ZOOM_SPEED;
+		gZoom = juClamp(gZoom, ZOOM_MIN, ZOOM_MAX);
+
 		// Adjust for possible new window size
 		int w, h;
 		SDL_GetWindowSize(window, &w, &h);
 		VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
 		spec.wOnScreen = w;
 		spec.hOnScreen = h;
-		spec.w = GAME_WIDTH;
-		spec.h = (float)GAME_WIDTH * ((float)h / (float)w);
+		spec.w = (float)GAME_WIDTH * gZoom;
+		spec.h = ((float)GAME_WIDTH * gZoom) * ((float)h / (float)w);
 		vk2dCameraUpdate(gCam, spec);
 
 		vk2dRendererStartFrame(clearColour);
