@@ -40,7 +40,7 @@ const real PLAYER_BASE_ROTATE_ACCELERATION = VK2D_PI * 0.003;
 const real PLAYER_BASE_ROTATE_FRICTION     = VK2D_PI * 0.001;
 const real PLAYER_BASE_ROTATE_TOP_SPEED    = VK2D_PI * 0.02;
 
-const real PLAYER_BASE_ACCELERATION = 0.05;
+const real PLAYER_BASE_ACCELERATION = 0.10;
 const real PLAYER_FRICTION          = 0.02;
 
 const real PHYSICS_BASE_TOP_SPEED = 15;
@@ -106,7 +106,7 @@ void physicsUpdate(Physics *physics, Vector *acceleration) {
 	// Add acceleration vector to the velocity vector then cap velocity
 	real rise = (sin(acceleration->direction) * acceleration->magnitude) + (sin(physics->velocity.direction) * physics->velocity.magnitude);
 	real run = (cos(acceleration->direction) * acceleration->magnitude) + (cos(physics->velocity.direction) * physics->velocity.magnitude);
-	physics->velocity.direction = run == 0 ? 0 : atan(rise / run);
+	physics->velocity.direction = run == 0 ? 0 : atan2(rise, run);
 	physics->velocity.magnitude = sqrt(pow(rise, 2) + pow(run, 2));
 	physics->velocity.magnitude = juClamp(physics->velocity.magnitude, -PHYSICS_BASE_TOP_SPEED, PHYSICS_BASE_TOP_SPEED);
 
@@ -137,15 +137,13 @@ void playerUpdate() {
 
 	// Calculate acceleration vector
 	Vector acceleration = {};
-	if (1){//juKeyboardGetKey(SDL_SCANCODE_SPACE)) {
+	if (juKeyboardGetKey(SDL_SCANCODE_SPACE)) {
 		acceleration.magnitude = PLAYER_BASE_ACCELERATION;
 		acceleration.direction = gPlayer.direction;
 	} else {
 		acceleration.magnitude = PLAYER_FRICTION;
 		acceleration.direction = gPlayer.physics.velocity.direction + VK2D_PI;
 	}
-	printf("acceleration: %fpps/%frad\n", acceleration.magnitude, acceleration.direction);
-	fflush(stdout);
 
 	physicsUpdate(&gPlayer.physics, &acceleration);
 }
