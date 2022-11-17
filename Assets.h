@@ -3,11 +3,12 @@
 #include "JamUtil.h"
 
 // Forward declare the asset array
-extern JULoadedAsset ASSETS[8];
+extern JULoadedAsset ASSETS[9];
 
 #ifdef ASSETS_IMPLEMENTATION
 JULoadedAsset ASSETS[] = {
     {"assets/Background.png"},
+    {"assets/Font.png"},
     {"assets/Foreground.png"},
     {"assets/Midground.png"},
     {"assets/Player.png"},
@@ -21,6 +22,7 @@ JULoadedAsset ASSETS[] = {
 typedef struct Assets {
     JULoader loader;
     VK2DTexture texBackground;
+    VK2DTexture texFont;
     VK2DTexture texForeground;
     VK2DTexture texMidground;
     VK2DTexture texPlayer;
@@ -37,8 +39,9 @@ void destroyAssets(Assets *s);
 #ifdef ASSETS_IMPLEMENTATION
 Assets *buildAssets() {
     Assets *s = malloc(sizeof(struct Assets));
-    s->loader = juLoaderCreate(ASSETS, 8);
+    s->loader = juLoaderCreate(ASSETS, 9);
     s->texBackground = juLoaderGetTexture(s->loader, "assets/Background.png");
+    s->texFont = juLoaderGetTexture(s->loader, "assets/Font.png");
     s->texForeground = juLoaderGetTexture(s->loader, "assets/Foreground.png");
     s->texMidground = juLoaderGetTexture(s->loader, "assets/Midground.png");
     s->texPlayer = juLoaderGetTexture(s->loader, "assets/Player.png");

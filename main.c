@@ -24,6 +24,8 @@ const real FPS_LIMIT    = 60;
 const real ZOOM_MIN     = 0.5;
 const real ZOOM_MAX     = 2;
 const real ZOOM_SPEED   = 0.25;
+const int FONT_WIDTH    = 40;
+const int FONT_HEIGHT   = 70;
 
 const real WORLD_MAX_WIDTH  = 60000;
 const real WORLD_MAX_HEIGHT = 60000;
@@ -39,16 +41,30 @@ const real PLAYER_BASE_ROTATE_FRICTION     = VK2D_PI * 0.001;
 const real PLAYER_BASE_ROTATE_TOP_SPEED    = VK2D_PI * 0.02;
 
 const real PLAYER_BASE_ACCELERATION = 0.05;
-const real PLAYER_BASE_TOP_SPEED    = 15;
 const real PLAYER_FRICTION          = 0.02;
 
+const real PHYSICS_BASE_TOP_SPEED = 15;
+
 /********************* Structs **********************/
+
+// Physics vector
+typedef struct {
+	real magnitude; // Pixels
+	real direction; // Radians
+} Vector;
+
+// Physics physics simulation
 typedef struct {
 	real x;
 	real y;
-	real dir;
+	Vector velocity;
+	real mass; // Kilograms
+} Physics;
+
+typedef struct {
+	Physics physics;
 	real dirVelocity;
-	real velocity;
+	real direction;
 } Player;
 
 /********************* Globals *********************/
@@ -56,6 +72,7 @@ Assets *gAssets = NULL;
 VK2DCameraIndex gCam = -1;
 Player gPlayer = {};
 real gZoom = 1;
+JUFont gFont = NULL;
 
 /********************* Common functions *********************/
 void drawTiledBackground(VK2DTexture texture, float rate) {
@@ -77,11 +94,32 @@ void drawTiledBackground(VK2DTexture texture, float rate) {
 			vk2dDrawTexture(texture, tileStartX + (x * texture->img->width), tileStartY + (y * texture->img->height));
 }
 
+/********************* Physics functions *********************/
+void physicsStart(Physics *physics, real x, real y) {
+	physics->x = x;
+	physics->y = y;
+	physics->velocity.magnitude = 0;
+	physics->velocity.direction = 0;
+}
+
+void physicsUpdate(Physics *physics, Vector *acceleration) {
+	// Add acceleration vector to the velocity vector then cap velocity
+	real rise = (sin(acceleration->direction) * acceleration->magnitude) + (sin(physics->velocity.direction) * physics->velocity.magnitude);
+	real run = (cos(acceleration->direction) * acceleration->magnitude) + (cos(physics->velocity.direction) * physics->velocity.magnitude);
+	physics->velocity.direction = run == 0 ? 0 : atan(rise / run);
+	physics->velocity.magnitude = sqrt(pow(rise, 2) + pow(run, 2));
+	physics->velocity.magnitude = juClamp(physics->velocity.magnitude, -PHYSICS_BASE_TOP_SPEED, PHYSICS_BASE_TOP_SPEED);
+
+	// Apply velocity to coordinates then cap coordinates
+	physics->x += juCastX(physics->velocity.magnitude, -physics->velocity.direction);
+	physics->y += juCastY(physics->velocity.magnitude, -physics->velocity.direction);
+	physics->x = juClamp(physics->x, 0, WORLD_MAX_WIDTH);
+	physics->y = juClamp(physics->y, 0, WORLD_MAX_HEIGHT);
+}
+
 /********************* Player functions *********************/
 void playerStart() {
-	gPlayer.x = PLAYER_START_X;
-	gPlayer.y = PLAYER_START_Y;
-	gPlayer.dir = gPlayer.velocity = gPlayer.dirVelocity = 0;
+	physicsStart(&gPlayer.physics, PLAYER_START_X, PLAYER_START_Y);
 }
 
 void playerUpdate() {
@@ -93,22 +131,23 @@ void playerUpdate() {
 			gPlayer.dirVelocity = 0;
 		else
 			gPlayer.dirVelocity -= juSign(gPlayer.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION;
-	}
+   	}
 	gPlayer.dirVelocity = juClamp(gPlayer.dirVelocity, -PLAYER_BASE_ROTATE_TOP_SPEED, PLAYER_BASE_ROTATE_TOP_SPEED);
-	gPlayer.dir += gPlayer.dirVelocity;
+	gPlayer.direction += gPlayer.dirVelocity;
 
-	// Accelerate the ship
-	if (juKeyboardGetKey(SDL_SCANCODE_SPACE))
-		gPlayer.velocity += PLAYER_BASE_ACCELERATION;
-	else
-		gPlayer.velocity -= PLAYER_FRICTION;
+	// Calculate acceleration vector
+	Vector acceleration = {};
+	if (1){//juKeyboardGetKey(SDL_SCANCODE_SPACE)) {
+		acceleration.magnitude = PLAYER_BASE_ACCELERATION;
+		acceleration.direction = gPlayer.direction;
+	} else {
+		acceleration.magnitude = PLAYER_FRICTION;
+		acceleration.direction = gPlayer.physics.velocity.direction + VK2D_PI;
+	}
+	printf("acceleration: %fpps/%frad\n", acceleration.magnitude, acceleration.direction);
+	fflush(stdout);
 
-	// Apply velocity and clamp cooridnates
-	gPlayer.velocity = juClamp(gPlayer.velocity, 0, PLAYER_BASE_TOP_SPEED);
-	gPlayer.x += juCastX(gPlayer.velocity, -gPlayer.dir);
-	gPlayer.y += juCastY(gPlayer.velocity, -gPlayer.dir);
-	gPlayer.x = juClamp(gPlayer.x, 0, WORLD_MAX_WIDTH);
-	gPlayer.y = juClamp(gPlayer.y, 0, WORLD_MAX_HEIGHT);
+	physicsUpdate(&gPlayer.physics, &acceleration);
 }
 
 void playerDraw() {
@@ -117,7 +156,7 @@ void playerDraw() {
 		player = gAssets->texPlayerThruster;
 	else
 		player = gAssets->texPlayer;
-	vk2dDrawTextureExt(player, gPlayer.x - (player->img->width / 2), gPlayer.y - (player->img->height / 2), 1, 1, gPlayer.dir + (VK2D_PI / 2), player->img->width / 2, player->img->height / 2);
+	vk2dDrawTextureExt(player, gPlayer.physics.x - (player->img->width / 2), gPlayer.physics.y - (player->img->height / 2), 1, 1, gPlayer.direction + (VK2D_PI / 2), player->img->width / 2, player->img->height / 2);
 }
 
 void playerEnd() {
@@ -135,8 +174,8 @@ gamestate gameUpdate() {
 
 	// Update camera around player
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
-	spec.x = gPlayer.x - (spec.w / 2);
-	spec.y = gPlayer.y - (spec.h / 2);
+	spec.x = gPlayer.physics.x - (spec.w / 2);
+	spec.y = gPlayer.physics.y - (spec.h / 2);
 	spec.x = juClamp(spec.x, 0, WORLD_MAX_WIDTH - spec.w);
 	spec.y = juClamp(spec.y, 0, WORLD_MAX_HEIGHT - spec.h);
 	vk2dCameraUpdate(gCam, spec);
@@ -189,6 +228,7 @@ int main() {
 	VK2DCameraSpec spec = {ct_Default, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 1, 0, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
 	gCam = vk2dCameraCreate(spec);
 	gAssets = buildAssets();
+	gFont = juFontLoadFromImage("assets/Font.png", 32, 128, FONT_WIDTH, FONT_HEIGHT);
 	gamestate state = GAMESTATE_MENU;
 	menuStart();
 	JUClock fpsLock;
@@ -253,6 +293,7 @@ int main() {
 
 	// Cleanup
 	vk2dRendererWait();
+	juFontFree(gFont);
 	destroyAssets(gAssets);
 	juQuit();
 	vk2dRendererQuit();
