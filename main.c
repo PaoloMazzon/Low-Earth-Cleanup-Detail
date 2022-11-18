@@ -162,6 +162,43 @@ void playerEnd() {
 }
 
 /********************* Game functions *********************/
+
+void gameDrawUI() {
+	// Get screen w/h
+	VK2DCameraSpec spec = vk2dCameraGetSpec(VK2D_DEFAULT_CAMERA);
+
+	// Test
+	juFontDraw(gFont, 0, 0, "The quick brown fox jumps over the lazy dog.");
+
+	// Player velocity
+	vec4 outline = {0, 0.2, 0, 1};
+	vec4 fill = {0, 0.4, 0, 1};
+	vec4 pointerRise = {0, 0, 0.9, 1};
+	vec4 pointerRun = {0.9, 0, 0, 1};
+	vec4 pointerHypotenuse = {1, 1, 1, 1};
+	float topLeftX = 10;
+	float topLeftY = spec.h - 110;
+	float w = 120;
+	float h = 80;
+	float centerX = topLeftX + (w / 2);
+	float centerY = topLeftY + (h / 2);
+	float rise = (sin(gPlayer.physics.velocity.direction) * gPlayer.physics.velocity.magnitude) * 2.6;
+	float run = (cos(gPlayer.physics.velocity.direction) * gPlayer.physics.velocity.magnitude) * 3.2;
+	vk2dRendererSetColourMod(fill);
+	vk2dDrawRectangle(topLeftX, topLeftY, w, h); // Background
+	vk2dRendererSetColourMod(outline);
+	vk2dDrawRectangleOutline(topLeftX, topLeftY, w, h, 1); // Outline
+	vk2dDrawLine(centerX, topLeftY, centerX, topLeftY + h); // Cross section up down
+	vk2dDrawLine(topLeftX, centerY, topLeftX + w, centerY); // Cross section left right
+	vk2dRendererSetColourMod(pointerRise);
+	vk2dDrawLine(centerX + run, centerY, centerX + run, centerY + rise); // Rise
+	vk2dRendererSetColourMod(pointerRun);
+	vk2dDrawLine(centerX, centerY, centerX + run, centerY); // Run
+	vk2dRendererSetColourMod(pointerHypotenuse);
+	vk2dDrawLine(centerX, centerY, centerX + run, centerY + rise); // Hyp
+	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
+}
+
 void gameStart() {
 	playerStart();
 }
@@ -178,13 +215,18 @@ gamestate gameUpdate() {
 	spec.y = juClamp(spec.y, 0, WORLD_MAX_HEIGHT - spec.h);
 	vk2dCameraUpdate(gCam, spec);
 
-	// Draw world
+	// Lock camera to world camera and draw world
 	vk2dRendererLockCameras(gCam);
 	vk2dDrawTexture(gAssets->texSun, spec.x + SUN_POS_X - spec.x * 0.05, spec.y + SUN_POS_Y - spec.y * 0.05);
 	drawTiledBackground(gAssets->texBackground, 0.8);
 	drawTiledBackground(gAssets->texMidground, 0.6);
 	drawTiledBackground(gAssets->texForeground, 0.5);
 	playerDraw();
+
+	// UI is drawn to the default camera
+	vk2dRendererLockCameras(VK2D_DEFAULT_CAMERA);
+	gameDrawUI();
+
 	vk2dRendererUnlockCameras();
 
 	return GAMESTATE_GAME;
@@ -254,6 +296,12 @@ int main() {
 		spec.w = (float)GAME_WIDTH * gZoom;
 		spec.h = ((float)GAME_WIDTH * gZoom) * ((float)h / (float)w);
 		vk2dCameraUpdate(gCam, spec);
+
+		// Fix for default camera being wonky???
+		spec = vk2dCameraGetSpec(VK2D_DEFAULT_CAMERA);
+		spec.y = spec.yOnScreen = 0;
+		spec.zoom = 1;
+		vk2dCameraUpdate(VK2D_DEFAULT_CAMERA, spec);
 
 		vk2dRendererStartFrame(clearColour);
 
