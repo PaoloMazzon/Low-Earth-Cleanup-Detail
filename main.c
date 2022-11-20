@@ -55,6 +55,14 @@ const real PLAYER_FRICTION          = 0.02;
 
 const real PHYSICS_BASE_TOP_SPEED = 15;
 
+const real TRASH_MIN_VELOCITY              = 2;
+const real TRASH_MAX_VELOCITY              = 10;
+const real TRASH_MIN_ROT_SPEED             = VK2D_PI * 0.01;
+const real TRASH_MAX_ROT_SPEED             = VK2D_PI * 0.03;
+const real TRASH_PLAYER_DIRECTION_ACCURACY = VK2D_PI * 0.3;
+const int  TRASH_LIFETIME                  = FPS_LIMIT * 10;
+const int  TRASH_FADE_OUT_TIME             = TRASH_LIFETIME * 0.25;
+
 /********************* Structs **********************/
 
 // Physics vector
@@ -78,6 +86,9 @@ typedef struct {
 
 typedef struct {
 	VK2DTexture tex;
+	int framesLeftAlive;
+	real rot;
+	real rotSpeed;
 } Trash;
 
 // Any kind of entity in the world
@@ -102,8 +113,24 @@ VK2DCameraIndex gCam = -1;
 Entity gPlayer = {ENTITY_TYPE_PLAYER};
 real gZoom = 1;
 JUFont gFont = NULL;
+Population gPopulation = {};
 
 /********************* Common functions *********************/
+// Returns a real from 0-1
+real random() {
+	return (real)(rand() % 100000) / 100000.0;
+}
+
+// Returns an int from [low, high)
+int randomRange(int low, int high) {
+	return low + (int)floor(random() * (high - low));
+}
+
+// Returns a real number from low to high
+real randomRangeReal(real low, real high) {
+	return low + (random() * (high - low));
+}
+
 void drawTiledBackground(VK2DTexture texture, float rate) {
 	VK2DCameraSpec camera = vk2dCameraGetSpec(gCam);
 
@@ -132,12 +159,14 @@ void physicsStart(Physics *physics, real x, real y) {
 }
 
 void physicsUpdate(Physics *physics, Vector *acceleration) {
-	// Add acceleration vector to the velocity vector then cap velocity
-	real rise = (sin(acceleration->direction) * acceleration->magnitude) + (sin(physics->velocity.direction) * physics->velocity.magnitude);
-	real run = (cos(acceleration->direction) * acceleration->magnitude) + (cos(physics->velocity.direction) * physics->velocity.magnitude);
-	physics->velocity.direction = run == 0 ? 0 : atan2(rise, run);
-	physics->velocity.magnitude = sqrt(pow(rise, 2) + pow(run, 2));
-	physics->velocity.magnitude = juClamp(physics->velocity.magnitude, -PHYSICS_BASE_TOP_SPEED, PHYSICS_BASE_TOP_SPEED);
+	if (acceleration != NULL) {
+		// Add acceleration vector to the velocity vector then cap velocity
+		real rise = (sin(acceleration->direction) * acceleration->magnitude) + (sin(physics->velocity.direction) * physics->velocity.magnitude);
+		real run = (cos(acceleration->direction) * acceleration->magnitude) + (cos(physics->velocity.direction) * physics->velocity.magnitude);
+		physics->velocity.direction = run == 0 ? 0 : atan2(rise, run);
+		physics->velocity.magnitude = sqrt(pow(rise, 2) + pow(run, 2));
+		physics->velocity.magnitude = juClamp(physics->velocity.magnitude, -PHYSICS_BASE_TOP_SPEED, PHYSICS_BASE_TOP_SPEED);
+	}
 
 	// Apply velocity to coordinates then cap coordinates
 	physics->x += juCastX(physics->velocity.magnitude, -physics->velocity.direction);
@@ -146,20 +175,48 @@ void physicsUpdate(Physics *physics, Vector *acceleration) {
 	physics->y = juClamp(physics->y, 0, WORLD_MAX_HEIGHT);
 }
 
-/********************* Population functions *********************/
-
-
 /********************* Trash functions *********************/
 void trashStart(Entity *entity) {
+	VK2DTexture tex[] = {gAssets->texTrash1, gAssets->texTrash2};
+	entity->type = ENTITY_TYPE_TRASH;
+	entity->trash.tex = tex[randomRange(0, 2)];
+	entity->trash.rotSpeed = randomRangeReal(TRASH_MIN_ROT_SPEED, TRASH_MAX_ROT_SPEED);
+	entity->trash.rot = 0;
+	entity->trash.framesLeftAlive = TRASH_LIFETIME;
 
-}
-
-void trashUpdate(Entity *entity) {
-
+	// Physics
+	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
+	if (randomRange(0, 1)) { // Left/right of the screen
+		entity->physics.x = randomRange(0, 1) ? spec.x - 100 : spec.x + spec.w + 100;
+		entity->physics.y = randomRangeReal(spec.y, spec.y + spec.h);
+	} else { // Top/bottom of the screen
+		entity->physics.x = randomRangeReal(spec.x, spec.x + spec.w);
+		entity->physics.y = randomRange(0, 1) ? spec.y - 100 : spec.y + spec.h + 100;
+	}
+	real angle = juPointAngle(gPlayer.physics.x, gPlayer.physics.y, entity->physics.x, entity->physics.y) - (VK2D_PI / 2);
+	entity->physics.velocity.direction = randomRangeReal(angle - TRASH_PLAYER_DIRECTION_ACCURACY, angle + TRASH_PLAYER_DIRECTION_ACCURACY);
+	entity->physics.velocity.magnitude = randomRangeReal(TRASH_MIN_VELOCITY, TRASH_MAX_VELOCITY);
 }
 
 void trashEnd(Entity *entity) {
+	entity->type = ENTITY_TYPE_NONE; // carted
+}
 
+void trashUpdate(Entity *entity) {
+	// Updating
+	physicsUpdate(&entity->physics, NULL);
+	entity->trash.rot += entity->trash.rotSpeed;
+	entity->trash.framesLeftAlive -= 1;
+	if (entity->trash.framesLeftAlive <= 0)
+		trashEnd(entity);
+
+	// Drawing
+	vec4 alpha = {1, 1, 1, 1};
+	if (entity->trash.framesLeftAlive <= TRASH_FADE_OUT_TIME)
+		alpha[3] = (float)entity->trash.framesLeftAlive / (float)TRASH_FADE_OUT_TIME;
+	float originX = entity->trash.tex->img->width / 2;
+	float originY = entity->trash.tex->img->height / 2;
+	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->trash.rot, originX, originY);
 }
 
 /********************* Drone functions *********************/
@@ -199,6 +256,46 @@ void garbageDisposalUpdate(Entity *entity) {
 
 void garbageDisposalEnd(Entity *entity) {
 
+}
+
+/********************* Population functions *********************/
+void popInit() {
+	gPopulation.entities = NULL;
+	gPopulation.size = 0;
+}
+
+// Returns a pointer to an entity you can fill out that will be in the population
+Entity* popGetNewEntity() {
+	int found = -1;
+	for (int i = 0; i < gPopulation.size; i++)
+		if (gPopulation.entities[i].type == ENTITY_TYPE_NONE)
+			found = i;
+
+	if (found == -1) {
+		gPopulation.entities = realloc(gPopulation.entities, (gPopulation.size + 5) * sizeof(Entity));
+		found = gPopulation.size;
+		gPopulation.size += 5;
+	}
+
+	return &gPopulation.entities[found];
+}
+
+void popUpdateEntities() {
+	for (int i = 0; i < gPopulation.size; i++) {
+		if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH) {
+			trashUpdate(&gPopulation.entities[i]);
+		} else if (gPopulation.entities[i].type == ENTITY_TYPE_DRONE) {
+			droneUpdate(&gPopulation.entities[i]);
+		} else if (gPopulation.entities[i].type == ENTITY_TYPE_MINE) {
+			mineUpdate(&gPopulation.entities[i]);
+		} else if (gPopulation.entities[i].type == ENTITY_TYPE_GARBAGE_DISPOSAL) {
+			garbageDisposalUpdate(&gPopulation.entities[i]);
+		}
+	}
+}
+
+void popEnd() {
+	free(gPopulation.entities);
 }
 
 /********************* Player functions *********************/
@@ -284,12 +381,18 @@ void gameDrawUI() {
 }
 
 void gameStart() {
+	popInit();
 	playerStart();
 }
 
 gamestate gameUpdate() {
+	// DEBUG
+	if (juKeyboardGetKeyPressed(SDL_SCANCODE_RETURN))
+		trashStart(popGetNewEntity());
+
 	// Update entities
 	playerUpdate();
+	popUpdateEntities();
 
 	// Update camera around player
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -318,6 +421,7 @@ gamestate gameUpdate() {
 
 void gameEnd() {
 	playerEnd();
+	popEnd();
 }
 
 /********************* Menu functions *********************/
