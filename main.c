@@ -1,6 +1,7 @@
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 #include <VK2D/VK2D.h>
+#include <time.h>
 
 #define ASSETS_IMPLEMENTATION
 #include "Assets.h"
@@ -59,9 +60,10 @@ const real TRASH_MIN_VELOCITY              = 2;
 const real TRASH_MAX_VELOCITY              = 10;
 const real TRASH_MIN_ROT_SPEED             = VK2D_PI * 0.01;
 const real TRASH_MAX_ROT_SPEED             = VK2D_PI * 0.03;
-const real TRASH_PLAYER_DIRECTION_ACCURACY = VK2D_PI * 0.3;
+const real TRASH_PLAYER_DIRECTION_ACCURACY = VK2D_PI * 0.1;
 const int  TRASH_LIFETIME                  = FPS_LIMIT * 10;
-const int  TRASH_FADE_OUT_TIME             = TRASH_LIFETIME * 0.25;
+const int  TRASH_FADE_OUT_TIME             = FPS_LIMIT * 3;
+const real TRASH_SPAWN_DISTANCE            = 1000;
 
 /********************* Structs **********************/
 
@@ -118,7 +120,7 @@ Population gPopulation = {};
 /********************* Common functions *********************/
 // Returns a real from 0-1
 real random() {
-	return (real)(rand() % 100000) / 100000.0;
+	return (real)(rand() % 1000) / 1000.0;
 }
 
 // Returns an int from [low, high)
@@ -186,14 +188,14 @@ void trashStart(Entity *entity) {
 
 	// Physics
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
-	if (randomRange(0, 1)) { // Left/right of the screen
-		entity->physics.x = randomRange(0, 1) ? spec.x - 100 : spec.x + spec.w + 100;
+	if (randomRange(0, 2)) { // Left/right of the screen
+		entity->physics.x = randomRange(0, 2) ? spec.x - TRASH_SPAWN_DISTANCE : spec.x + spec.w + TRASH_SPAWN_DISTANCE;
 		entity->physics.y = randomRangeReal(spec.y, spec.y + spec.h);
 	} else { // Top/bottom of the screen
 		entity->physics.x = randomRangeReal(spec.x, spec.x + spec.w);
-		entity->physics.y = randomRange(0, 1) ? spec.y - 100 : spec.y + spec.h + 100;
+		entity->physics.y = randomRange(0, 2) ? spec.y - TRASH_SPAWN_DISTANCE : spec.y + spec.h + TRASH_SPAWN_DISTANCE;
 	}
-	real angle = juPointAngle(gPlayer.physics.x, gPlayer.physics.y, entity->physics.x, entity->physics.y) - (VK2D_PI / 2);
+	real angle = juPointAngle(gPlayer.physics.x, gPlayer.physics.y, entity->physics.x, entity->physics.y);// - (VK2D_PI / 2);
 	entity->physics.velocity.direction = randomRangeReal(angle - TRASH_PLAYER_DIRECTION_ACCURACY, angle + TRASH_PLAYER_DIRECTION_ACCURACY);
 	entity->physics.velocity.magnitude = randomRangeReal(TRASH_MIN_VELOCITY, TRASH_MAX_VELOCITY);
 }
@@ -216,7 +218,9 @@ void trashUpdate(Entity *entity) {
 		alpha[3] = (float)entity->trash.framesLeftAlive / (float)TRASH_FADE_OUT_TIME;
 	float originX = entity->trash.tex->img->width / 2;
 	float originY = entity->trash.tex->img->height / 2;
+	vk2dRendererSetColourMod(alpha);
 	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->trash.rot, originX, originY);
+	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
 }
 
 /********************* Drone functions *********************/
@@ -381,16 +385,18 @@ void gameDrawUI() {
 }
 
 void gameStart() {
+	srand(time(NULL));
 	popInit();
 	playerStart();
 }
 
 gamestate gameUpdate() {
-	// DEBUG
-	if (juKeyboardGetKeyPressed(SDL_SCANCODE_RETURN))
+	// TODO: Make trash automatically spawn
+	if (juKeyboardGetKey(SDL_SCANCODE_RETURN))
 		trashStart(popGetNewEntity());
 
 	// Update entities
+	vk2dRendererLockCameras(gCam);
 	playerUpdate();
 	popUpdateEntities();
 
