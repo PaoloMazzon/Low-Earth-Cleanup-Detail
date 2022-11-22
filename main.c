@@ -80,6 +80,10 @@ const real DRONE_SPAWN_DISTANCE           = 2000;
 const real DRONE_DYING_SPEED              = 3;
 const real DRONE_DAMAGE_RADIUS            = 150;
 
+const real GARBAGE_DISPOSAL_START_X       = PLAYER_START_X + 1000;
+const real GARBAGE_DISPOSAL_START_Y       = PLAYER_START_Y;
+const real GARBAGE_DISPOSAL_PICKUP_RADIUS = 300;
+
 /********************* Structs **********************/
 
 // Physics vector
@@ -139,6 +143,7 @@ typedef struct {
 Assets *gAssets = NULL;
 VK2DCameraIndex gCam = -1;
 Entity gPlayer = {ENTITY_TYPE_PLAYER};
+int gGarbageDisposal = -1;
 real gZoom = 1;
 JUFont gFont = NULL;
 Population gPopulation = {};
@@ -341,11 +346,11 @@ void mineEnd(Entity *entity) {
 void garbageDisposalStart(Entity *entity) {
 	memset(entity, 0, sizeof(Entity));
 	entity->type = ENTITY_TYPE_GARBAGE_DISPOSAL;
-	physicsStart(&entity->physics, 0, 0);
+	physicsStart(&entity->physics, GARBAGE_DISPOSAL_START_X, GARBAGE_DISPOSAL_START_Y);
 }
 
 void garbageDisposalUpdate(Entity *entity) {
-
+	vk2dDrawTexture(gAssets->texGarbageDisposal, entity->physics.x - (gAssets->texGarbageDisposal->img->width / 2), entity->physics.y - (gAssets->texGarbageDisposal->img->height / 2));
 }
 
 void garbageDisposalEnd(Entity *entity) {
@@ -359,7 +364,7 @@ void popInit() {
 }
 
 // Returns a pointer to an entity you can fill out that will be in the population
-Entity* popGetNewEntity() {
+Entity* popGetNewEntity(int *location) {
 	int found = -1;
 	for (int i = 0; i < gPopulation.size; i++)
 		if (gPopulation.entities[i].type == ENTITY_TYPE_NONE)
@@ -367,10 +372,14 @@ Entity* popGetNewEntity() {
 
 	if (found == -1) {
 		gPopulation.entities = realloc(gPopulation.entities, (gPopulation.size + 5) * sizeof(Entity));
+		for (int i = gPopulation.size; i < gPopulation.size + 5; i++)
+			gPopulation.entities[i].type = ENTITY_TYPE_NONE;
 		found = gPopulation.size;
 		gPopulation.size += 5;
 	}
 
+	if (location != NULL)
+		*location = found;
 	return &gPopulation.entities[found];
 }
 
@@ -390,6 +399,10 @@ void popUpdateEntities() {
 
 void popEnd() {
 	free(gPopulation.entities);
+}
+
+Entity* popGet(int location) {
+	return &gPopulation.entities[location];
 }
 
 /********************* Player functions *********************/
@@ -495,9 +508,23 @@ void playerTakeDamage(Entity *entity) {
 void gameDrawUI() {
 	// Get screen w/h
 	VK2DCameraSpec spec = vk2dCameraGetSpec(VK2D_DEFAULT_CAMERA);
+	VK2DCameraSpec gameWorldCameraSpec = vk2dCameraGetSpec(gCam);
+	Entity *gd = popGet(gGarbageDisposal);
 
-	// Test
-	juFontDraw(gFont, 0, 0, "The quick brown fox jumps over the lazy dog.");
+	// Point to garbage disposal
+	if (juPointDistance(gPlayer.physics.x, gPlayer.physics.y, gd->physics.x, gd->physics.y) > gameWorldCameraSpec.h / 2) {
+		float angle = juPointAngle(gPlayer.physics.x, gPlayer.physics.y, gd->physics.x, gd->physics.y);
+		float originX = gAssets->texArrow->img->width / 2;
+		float originY = gAssets->texArrow->img->height / 2;
+		float x = (spec.x + (spec.w / 2)) + juCastX((spec.w / 2) - originX, angle);
+		float y = (spec.y + (spec.h / 2)) + juCastY((spec.h / 2) - originY, angle);
+		vk2dDrawTextureExt(gAssets->texArrow, x - originX, y - originY, 1, 1, -angle + (VK2D_PI / 2), originX, originY);
+	}
+
+	// Player life
+	for (int i = 0; i < gPlayer.player.hp; i++) {
+		vk2dDrawTexture(gAssets->texHP, 10 + (i * gAssets->texHP->img->width), 10);
+	}
 
 	// Player velocity
 	vec4 outline = {0, 0.2, 0, 1};
@@ -532,14 +559,15 @@ void gameStart() {
 	srand(time(NULL));
 	popInit();
 	playerStart();
+	garbageDisposalStart(popGetNewEntity(&gGarbageDisposal));
 }
 
 gamestate gameUpdate() {
 	// TODO: Make trash automatically spawn
 	if (juKeyboardGetKey(SDL_SCANCODE_RETURN))
-		trashStart(popGetNewEntity());
+		trashStart(popGetNewEntity(NULL));
 	if (juKeyboardGetKeyPressed(SDL_SCANCODE_P))
-		droneStart(popGetNewEntity());
+		droneStart(popGetNewEntity(NULL));
 
 	// Update camera around player
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -571,6 +599,8 @@ gamestate gameUpdate() {
 }
 
 void gameEnd() {
+	garbageDisposalEnd(gGarbageDisposal);
+	gGarbageDisposal = NULL;
 	playerEnd();
 	popEnd();
 }
