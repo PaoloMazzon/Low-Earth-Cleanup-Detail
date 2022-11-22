@@ -51,8 +51,8 @@ const real PLAYER_START_Y = WORLD_MAX_HEIGHT / 2;
 const real PLAYER_BASE_ROTATE_ACCELERATION = VK2D_PI * 0.003;
 const real PLAYER_BASE_ROTATE_FRICTION     = VK2D_PI * 0.001;
 const real PLAYER_BASE_ROTATE_TOP_SPEED    = VK2D_PI * 0.02;
-const real PLAYER_BASE_TRASH_GRAB_DISTANCE = 100;
-const real PLAYER_BASE_TRASH_THROW_SPEED   = 20;
+const real PLAYER_BASE_TRASH_GRAB_DISTANCE = 200;
+const real PLAYER_BASE_TRASH_THROW_SPEED   = 20; // MUST NOT BE IN THE RANGE OF [TRASH_MIN_VELOCITY, TRASH_MAX_VELOCITY]
 const real PLAYER_TRASH_DRAW_DISTANCE      = 200;
 
 const real PLAYER_BASE_ACCELERATION = 0.10;
@@ -65,9 +65,16 @@ const real TRASH_MAX_VELOCITY              = 10;
 const real TRASH_MIN_ROT_SPEED             = VK2D_PI * 0.01;
 const real TRASH_MAX_ROT_SPEED             = VK2D_PI * 0.03;
 const real TRASH_PLAYER_DIRECTION_ACCURACY = VK2D_PI * 0.1;
-const int  TRASH_LIFETIME                  = FPS_LIMIT * 10;
+const int  TRASH_LIFETIME                  = FPS_LIMIT * 15;
 const int  TRASH_FADE_OUT_TIME             = FPS_LIMIT * 3;
 const real TRASH_SPAWN_DISTANCE            = 1000;
+
+const real DRONE_BASE_ACCELERATION        = 0.15;
+const int  DRONE_DYING_TIMER              = FPS_LIMIT * 3;
+const real DRONE_DYING_ROTATE_SPEED       = VK2D_PI * 0.05;
+const real DRONE_TRASH_COLLISION_DISTANCE = 100;
+const real DRONE_SPAWN_DISTANCE           = 2000;
+const real DRONE_DYING_SPEED              = 3;
 
 /********************* Structs **********************/
 
@@ -99,6 +106,12 @@ typedef struct {
 	bool grabbed;
 } Trash;
 
+typedef struct {
+	bool dying;
+	int dyingTimer;
+	real dyingRotation;
+} Drone;
+
 // Any kind of entity in the world
 typedef struct {
 	entitytype type; // entities can delete themselves by setting this to ENTITY_TYPE_NONE
@@ -106,6 +119,7 @@ typedef struct {
 	union {
 		Player player;
 		Trash trash;
+		Drone drone;
 	};
 } Entity;
 
@@ -211,6 +225,7 @@ void trashEnd(Entity *entity) {
 	entity->type = ENTITY_TYPE_NONE; // carted
 }
 
+void droneEnd(Entity *entity);
 void trashUpdate(Entity *entity) {
 	// Updating
 	if (!entity->trash.grabbed) {
@@ -221,6 +236,18 @@ void trashUpdate(Entity *entity) {
 			trashEnd(entity);
 	} else {
 		entity->trash.framesLeftAlive = TRASH_LIFETIME;
+	}
+
+	// Check if we were thrown and as such check if we hit any enemies
+	if (entity->physics.velocity.magnitude == PLAYER_BASE_TRASH_THROW_SPEED) {
+		for (int i = 0; i < gPopulation.size && entity->physics.velocity.magnitude == PLAYER_BASE_TRASH_THROW_SPEED; i++) {
+			Entity *drone = &gPopulation.entities[i];
+			if (drone->type == ENTITY_TYPE_DRONE && !drone->drone.dying && juPointDistance(entity->physics.x, entity->physics.y, drone->physics.x, drone->physics.y) < DRONE_TRASH_COLLISION_DISTANCE) {
+				droneEnd(drone);
+				drone->physics.velocity = entity->physics.velocity;
+				entity->physics.velocity.magnitude = DRONE_DYING_SPEED;
+			}
+		}
 	}
 
 	// Drawing
@@ -236,15 +263,40 @@ void trashUpdate(Entity *entity) {
 
 /********************* Drone functions *********************/
 void droneStart(Entity *entity) {
+	// Zero entity
+	memset(entity, 0, sizeof(Entity));
+	entity->type = ENTITY_TYPE_DRONE;
 
-}
-
-void droneUpdate(Entity *entity) {
-
+	// Spawn off screen
+	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
+	if (randomRange(0, 2)) { // Left/right of the screen
+		entity->physics.x = randomRange(0, 2) ? spec.x - DRONE_SPAWN_DISTANCE : spec.x + spec.w + DRONE_SPAWN_DISTANCE;
+		entity->physics.y = randomRangeReal(spec.y, spec.y + spec.h);
+	} else { // Top/bottom of the screen
+		entity->physics.x = randomRangeReal(spec.x, spec.x + spec.w);
+		entity->physics.y = randomRange(0, 2) ? spec.y - DRONE_SPAWN_DISTANCE : spec.y + spec.h + DRONE_SPAWN_DISTANCE;
+	}
 }
 
 void droneEnd(Entity *entity) {
+	entity->drone.dying = true;
+	entity->drone.dyingTimer = DRONE_DYING_TIMER;
+}
 
+void droneUpdate(Entity *entity) {
+	float originX = gAssets->texDrone->img->width / 2;
+	float originY = gAssets->texDrone->img->height / 2;
+	if (!entity->drone.dying) {
+		Vector acceleration = {DRONE_BASE_ACCELERATION, (VK2D_PI / 2) - juPointAngle(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y) - (VK2D_PI / 2)};
+		physicsUpdate(&entity->physics, &acceleration);
+		vk2dDrawTextureExt(gAssets->texDrone, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->physics.velocity.direction, originX, originY);
+	} else {
+		physicsUpdate(&entity->physics, NULL);
+		entity->drone.dyingTimer -= 1;
+		entity->drone.dyingRotation += DRONE_DYING_ROTATE_SPEED;
+		float scale = (float)entity->drone.dyingTimer / (float)DRONE_DYING_TIMER;
+		vk2dDrawTextureExt(gAssets->texDrone, entity->physics.x - originX, entity->physics.y - originY, scale, scale, entity->drone.dyingRotation, originX, originY);
+	}
 }
 
 /********************* Mine functions *********************/
@@ -429,6 +481,8 @@ gamestate gameUpdate() {
 	// TODO: Make trash automatically spawn
 	if (juKeyboardGetKey(SDL_SCANCODE_RETURN))
 		trashStart(popGetNewEntity());
+	if (juKeyboardGetKeyPressed(SDL_SCANCODE_P))
+		droneStart(popGetNewEntity());
 
 	// Update camera around player
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
