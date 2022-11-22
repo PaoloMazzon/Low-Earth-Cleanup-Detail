@@ -26,17 +26,18 @@ typedef enum {
 } entitytype;
 
 /********************* Constants **********************/
-const int WINDOW_WIDTH   = 1024;
-const int WINDOW_HEIGHT  = 768;
-const int GAME_WIDTH     = 1500;
-const int GAME_HEIGHT    = 1125;
-const real FPS_LIMIT     = 60;
-const real ZOOM_MIN      = 0.5;
-const real ZOOM_MAX      = 2;
-const real ZOOM_SPEED    = 0.25;
-const int FONT_WIDTH     = 40;
-const int FONT_HEIGHT    = 70;
-const float CAMERA_SPEED = 0.2;
+const int   WINDOW_WIDTH   = 1024;
+const int   WINDOW_HEIGHT  = 768;
+const int   GAME_WIDTH     = 1500;
+const int   GAME_HEIGHT    = 1125;
+const real  FPS_LIMIT      = 60;
+const real  ZOOM_MIN       = 0.5;
+const real  ZOOM_MAX       = 2;
+const real  ZOOM_SPEED     = 0.25;
+const int   FONT_WIDTH     = 40;
+const int   FONT_HEIGHT    = 70;
+const float CAMERA_SPEED   = 0.2;
+const int   NO_TRASH       = -1;
 
 const real WORLD_MAX_WIDTH  = 60000;
 const real WORLD_MAX_HEIGHT = 60000;
@@ -50,6 +51,9 @@ const real PLAYER_START_Y = WORLD_MAX_HEIGHT / 2;
 const real PLAYER_BASE_ROTATE_ACCELERATION = VK2D_PI * 0.003;
 const real PLAYER_BASE_ROTATE_FRICTION     = VK2D_PI * 0.001;
 const real PLAYER_BASE_ROTATE_TOP_SPEED    = VK2D_PI * 0.02;
+const real PLAYER_BASE_TRASH_GRAB_DISTANCE = 100;
+const real PLAYER_BASE_TRASH_THROW_SPEED   = 20;
+const real PLAYER_TRASH_DRAW_DISTANCE      = 200;
 
 const real PLAYER_BASE_ACCELERATION = 0.10;
 const real PLAYER_FRICTION          = 0.02;
@@ -84,6 +88,7 @@ typedef struct {
 typedef struct {
 	real dirVelocity;
 	real direction;
+	int grabbedTrash; // Index of the grabbed trash
 } Player;
 
 typedef struct {
@@ -91,6 +96,7 @@ typedef struct {
 	int framesLeftAlive;
 	real rot;
 	real rotSpeed;
+	bool grabbed;
 } Trash;
 
 // Any kind of entity in the world
@@ -185,6 +191,7 @@ void trashStart(Entity *entity) {
 	entity->trash.rotSpeed = randomRangeReal(TRASH_MIN_ROT_SPEED, TRASH_MAX_ROT_SPEED);
 	entity->trash.rot = 0;
 	entity->trash.framesLeftAlive = TRASH_LIFETIME;
+	entity->trash.grabbed = false;
 
 	// Physics
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -206,11 +213,15 @@ void trashEnd(Entity *entity) {
 
 void trashUpdate(Entity *entity) {
 	// Updating
-	physicsUpdate(&entity->physics, NULL);
-	entity->trash.rot += entity->trash.rotSpeed;
-	entity->trash.framesLeftAlive -= 1;
-	if (entity->trash.framesLeftAlive <= 0)
-		trashEnd(entity);
+	if (!entity->trash.grabbed) {
+		physicsUpdate(&entity->physics, NULL);
+		entity->trash.rot += entity->trash.rotSpeed;
+		entity->trash.framesLeftAlive -= 1;
+		if (entity->trash.framesLeftAlive <= 0)
+			trashEnd(entity);
+	} else {
+		entity->trash.framesLeftAlive = TRASH_LIFETIME;
+	}
 
 	// Drawing
 	vec4 alpha = {1, 1, 1, 1};
@@ -219,7 +230,7 @@ void trashUpdate(Entity *entity) {
 	float originX = entity->trash.tex->img->width / 2;
 	float originY = entity->trash.tex->img->height / 2;
 	vk2dRendererSetColourMod(alpha);
-	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->trash.rot, originX, originY);
+	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - originX, entity->physics.y - originY, alpha[3], alpha[3], entity->trash.rot, originX, originY);
 	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
 }
 
@@ -305,6 +316,7 @@ void popEnd() {
 /********************* Player functions *********************/
 void playerStart() {
 	physicsStart(&gPlayer.physics, PLAYER_START_X, PLAYER_START_Y);
+	gPlayer.player.grabbedTrash = NO_TRASH;
 }
 
 void playerUpdate() {
@@ -328,6 +340,29 @@ void playerUpdate() {
 	} else {
 		acceleration.magnitude = PLAYER_FRICTION;
 		acceleration.direction = gPlayer.physics.velocity.direction + VK2D_PI;
+	}
+
+	// Check if the player grabs some trash
+	if (juKeyboardGetKeyPressed(SDL_SCANCODE_LSHIFT)) {
+		for (int i = 0; i < gPopulation.size && gPlayer.player.grabbedTrash == NO_TRASH; i++) {
+			if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH && juPointDistance(gPlayer.physics.x, gPlayer.physics.y, gPopulation.entities[i].physics.x, gPopulation.entities[i].physics.y) < PLAYER_BASE_TRASH_GRAB_DISTANCE) {
+				gPlayer.player.grabbedTrash = i;
+				gPopulation.entities[i].trash.grabbed = true;
+			}
+		}
+	} else if (juKeyboardGetKeyReleased(SDL_SCANCODE_LSHIFT) && gPlayer.player.grabbedTrash != NO_TRASH) {
+		Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
+		trash->physics.velocity.direction = gPlayer.player.direction;
+		trash->physics.velocity.magnitude = PLAYER_BASE_TRASH_THROW_SPEED;
+		trash->trash.grabbed = false;
+		gPlayer.player.grabbedTrash = NO_TRASH;
+	}
+
+	// Do stuff with grabbed trash
+	if (gPlayer.player.grabbedTrash != NO_TRASH) {
+		Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
+		trash->physics.x = gPlayer.physics.x + juCastX(PLAYER_TRASH_DRAW_DISTANCE, -gPlayer.player.direction);
+		trash->physics.y = gPlayer.physics.y + juCastY(PLAYER_TRASH_DRAW_DISTANCE, -gPlayer.player.direction);
 	}
 
 	physicsUpdate(&gPlayer.physics, &acceleration);
@@ -395,11 +430,6 @@ gamestate gameUpdate() {
 	if (juKeyboardGetKey(SDL_SCANCODE_RETURN))
 		trashStart(popGetNewEntity());
 
-	// Update entities
-	vk2dRendererLockCameras(gCam);
-	playerUpdate();
-	popUpdateEntities();
-
 	// Update camera around player
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
 	spec.x += ((gPlayer.physics.x - (spec.w / 2)) - spec.x) * CAMERA_SPEED;
@@ -414,6 +444,10 @@ gamestate gameUpdate() {
 	drawTiledBackground(gAssets->texBackground, 0.8);
 	drawTiledBackground(gAssets->texMidground, 0.6);
 	drawTiledBackground(gAssets->texForeground, 0.5);
+
+	// Update entities
+	playerUpdate();
+	popUpdateEntities();
 	playerDraw();
 
 	// UI is drawn to the default camera
