@@ -147,6 +147,7 @@ int gGarbageDisposal = -1;
 real gZoom = 1;
 JUFont gFont = NULL;
 Population gPopulation = {};
+real gScore = 0;
 
 /********************* Common functions *********************/
 // Returns a real from 0-1
@@ -525,6 +526,11 @@ void gameDrawUI() {
 	for (int i = 0; i < gPlayer.player.hp; i++) {
 		vk2dDrawTexture(gAssets->texHP, 10 + (i * gAssets->texHP->img->width), 10);
 	}
+
+	// Score
+	char score[100];
+	snprintf(score, 100, "$%.2f", gScore);
+	juFontDraw(gFont, spec.w - 10 - (strlen(score) * gFont->characters[0].w), 10, score);
 
 	// Player velocity
 	vec4 outline = {0, 0.2, 0, 1};
