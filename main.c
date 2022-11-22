@@ -48,15 +48,18 @@ const real SUN_POS_Y = 400;
 const real PLAYER_START_X = WORLD_MAX_WIDTH / 2;
 const real PLAYER_START_Y = WORLD_MAX_HEIGHT / 2;
 
-const real PLAYER_BASE_ROTATE_ACCELERATION = VK2D_PI * 0.003;
-const real PLAYER_BASE_ROTATE_FRICTION     = VK2D_PI * 0.001;
-const real PLAYER_BASE_ROTATE_TOP_SPEED    = VK2D_PI * 0.02;
-const real PLAYER_BASE_TRASH_GRAB_DISTANCE = 200;
-const real PLAYER_BASE_TRASH_THROW_SPEED   = 20; // MUST NOT BE IN THE RANGE OF [TRASH_MIN_VELOCITY, TRASH_MAX_VELOCITY]
-const real PLAYER_TRASH_DRAW_DISTANCE      = 200;
-
-const real PLAYER_BASE_ACCELERATION = 0.10;
-const real PLAYER_FRICTION          = 0.02;
+const real PLAYER_BASE_ROTATE_ACCELERATION  = VK2D_PI * 0.003;
+const real PLAYER_BASE_ROTATE_FRICTION      = VK2D_PI * 0.001;
+const real PLAYER_BASE_ROTATE_TOP_SPEED     = VK2D_PI * 0.02;
+const real PLAYER_BASE_TRASH_GRAB_DISTANCE  = 200;
+const real PLAYER_BASE_TRASH_THROW_SPEED    = 20; // MUST NOT BE IN THE RANGE OF [TRASH_MIN_VELOCITY, TRASH_MAX_VELOCITY]
+const real PLAYER_TRASH_DRAW_DISTANCE       = 200;
+const int  PLAYER_DAMAGED_IFRAMES           = FPS_LIMIT * 3;
+const int  PLAYER_DAMAGED_BLINKING_INTERVAL = 10;
+const real PLAYER_BASE_ACCELERATION         = 0.10;
+const real PLAYER_FRICTION                  = 0.02;
+const real PLAYER_BASE_HP                   = 5;
+const real PLAYER_DYING_ROTATE_SPEED        = VK2D_PI * 0.05;
 
 const real PHYSICS_BASE_TOP_SPEED = 15;
 
@@ -75,6 +78,7 @@ const real DRONE_DYING_ROTATE_SPEED       = VK2D_PI * 0.05;
 const real DRONE_TRASH_COLLISION_DISTANCE = 100;
 const real DRONE_SPAWN_DISTANCE           = 2000;
 const real DRONE_DYING_SPEED              = 3;
+const real DRONE_DAMAGE_RADIUS            = 150;
 
 /********************* Structs **********************/
 
@@ -96,6 +100,8 @@ typedef struct {
 	real dirVelocity;
 	real direction;
 	int grabbedTrash; // Index of the grabbed trash
+	real hp;
+	int iframes; // iframes left after getting damaged
 } Player;
 
 typedef struct {
@@ -245,7 +251,8 @@ void trashUpdate(Entity *entity) {
 			if (drone->type == ENTITY_TYPE_DRONE && !drone->drone.dying && juPointDistance(entity->physics.x, entity->physics.y, drone->physics.x, drone->physics.y) < DRONE_TRASH_COLLISION_DISTANCE) {
 				droneEnd(drone);
 				drone->physics.velocity = entity->physics.velocity;
-				entity->physics.velocity.magnitude = DRONE_DYING_SPEED;
+				drone->physics.velocity.magnitude = DRONE_DYING_SPEED;
+				entity->physics.velocity.magnitude /= 2;
 			}
 		}
 	}
@@ -262,6 +269,7 @@ void trashUpdate(Entity *entity) {
 }
 
 /********************* Drone functions *********************/
+void playerTakeDamage(Entity *entity);
 void droneStart(Entity *entity) {
 	// Zero entity
 	memset(entity, 0, sizeof(Entity));
@@ -287,21 +295,38 @@ void droneUpdate(Entity *entity) {
 	float originX = gAssets->texDrone->img->width / 2;
 	float originY = gAssets->texDrone->img->height / 2;
 	if (!entity->drone.dying) {
+		// Accelerate towards the player
 		Vector acceleration = {DRONE_BASE_ACCELERATION, (VK2D_PI / 2) - juPointAngle(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y) - (VK2D_PI / 2)};
 		physicsUpdate(&entity->physics, &acceleration);
+
+		// Check if we're damaging the player
+		if (juPointDistance(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y) <= DRONE_DAMAGE_RADIUS) {
+			playerTakeDamage(entity);
+			entity->physics.velocity.direction += VK2D_PI;
+			entity->physics.velocity.magnitude *= 0.5;
+		}
+
+		// Draw
 		vk2dDrawTextureExt(gAssets->texDrone, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->physics.velocity.direction, originX, originY);
 	} else {
+		// Dying animation
 		physicsUpdate(&entity->physics, NULL);
 		entity->drone.dyingTimer -= 1;
 		entity->drone.dyingRotation += DRONE_DYING_ROTATE_SPEED;
 		float scale = (float)entity->drone.dyingTimer / (float)DRONE_DYING_TIMER;
 		vk2dDrawTextureExt(gAssets->texDrone, entity->physics.x - originX, entity->physics.y - originY, scale, scale, entity->drone.dyingRotation, originX, originY);
+
+		// Delete drone when animation is done
+		if (entity->drone.dyingTimer <= 0)
+			entity->type = ENTITY_TYPE_NONE;
 	}
 }
 
 /********************* Mine functions *********************/
 void mineStart(Entity *entity) {
-
+	memset(entity, 0, sizeof(Entity));
+	entity->type = ENTITY_TYPE_MINE;
+	physicsStart(&entity->physics, 0, 0);
 }
 
 void mineUpdate(Entity *entity) {
@@ -314,7 +339,9 @@ void mineEnd(Entity *entity) {
 
 /********************* Garbage disposal functions *********************/
 void garbageDisposalStart(Entity *entity) {
-
+	memset(entity, 0, sizeof(Entity));
+	entity->type = ENTITY_TYPE_GARBAGE_DISPOSAL;
+	physicsStart(&entity->physics, 0, 0);
 }
 
 void garbageDisposalUpdate(Entity *entity) {
@@ -367,57 +394,76 @@ void popEnd() {
 
 /********************* Player functions *********************/
 void playerStart() {
+	memset(&gPlayer, 0, sizeof(Entity));
+	gPlayer.type = ENTITY_TYPE_PLAYER;
 	physicsStart(&gPlayer.physics, PLAYER_START_X, PLAYER_START_Y);
 	gPlayer.player.grabbedTrash = NO_TRASH;
+	gPlayer.player.hp = PLAYER_BASE_HP;
 }
 
 void playerUpdate() {
-	// Rotate the ship
-	if (juKeyboardGetKey(SDL_SCANCODE_A) || juKeyboardGetKey(SDL_SCANCODE_D)) {
-		gPlayer.player.dirVelocity += (-((real) juKeyboardGetKey(SDL_SCANCODE_A)) + ((real) juKeyboardGetKey(SDL_SCANCODE_D))) * PLAYER_BASE_ROTATE_ACCELERATION;
-	} else {
-		if (juSign(gPlayer.player.dirVelocity - juSign(gPlayer.player.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION) != juSign(gPlayer.player.dirVelocity))
-			gPlayer.player.dirVelocity = 0;
-		else
-			gPlayer.player.dirVelocity -= juSign(gPlayer.player.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION;
-   	}
-	gPlayer.player.dirVelocity = juClamp(gPlayer.player.dirVelocity, -PLAYER_BASE_ROTATE_TOP_SPEED, PLAYER_BASE_ROTATE_TOP_SPEED);
-	gPlayer.player.direction += gPlayer.player.dirVelocity;
-
-	// Calculate acceleration vector
-	Vector acceleration = {};
-	if (juKeyboardGetKey(SDL_SCANCODE_SPACE)) {
-		acceleration.magnitude = PLAYER_BASE_ACCELERATION;
-		acceleration.direction = gPlayer.player.direction;
-	} else {
-		acceleration.magnitude = PLAYER_FRICTION;
-		acceleration.direction = gPlayer.physics.velocity.direction + VK2D_PI;
-	}
-
-	// Check if the player grabs some trash
-	if (juKeyboardGetKeyPressed(SDL_SCANCODE_LSHIFT)) {
-		for (int i = 0; i < gPopulation.size && gPlayer.player.grabbedTrash == NO_TRASH; i++) {
-			if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH && juPointDistance(gPlayer.physics.x, gPlayer.physics.y, gPopulation.entities[i].physics.x, gPopulation.entities[i].physics.y) < PLAYER_BASE_TRASH_GRAB_DISTANCE) {
-				gPlayer.player.grabbedTrash = i;
-				gPopulation.entities[i].trash.grabbed = true;
-			}
+	if (gPlayer.player.hp > 0) {
+		// Rotate the ship
+		if (juKeyboardGetKey(SDL_SCANCODE_A) || juKeyboardGetKey(SDL_SCANCODE_D)) {
+			gPlayer.player.dirVelocity +=
+					(-((real) juKeyboardGetKey(SDL_SCANCODE_A)) + ((real) juKeyboardGetKey(SDL_SCANCODE_D))) *
+					PLAYER_BASE_ROTATE_ACCELERATION;
+		} else {
+			if (juSign(gPlayer.player.dirVelocity - juSign(gPlayer.player.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION) !=
+				juSign(gPlayer.player.dirVelocity))
+				gPlayer.player.dirVelocity = 0;
+			else
+				gPlayer.player.dirVelocity -= juSign(gPlayer.player.dirVelocity) * PLAYER_BASE_ROTATE_FRICTION;
 		}
-	} else if (juKeyboardGetKeyReleased(SDL_SCANCODE_LSHIFT) && gPlayer.player.grabbedTrash != NO_TRASH) {
-		Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
-		trash->physics.velocity.direction = gPlayer.player.direction;
-		trash->physics.velocity.magnitude = PLAYER_BASE_TRASH_THROW_SPEED;
-		trash->trash.grabbed = false;
-		gPlayer.player.grabbedTrash = NO_TRASH;
-	}
+		gPlayer.player.dirVelocity = juClamp(gPlayer.player.dirVelocity, -PLAYER_BASE_ROTATE_TOP_SPEED,
+											 PLAYER_BASE_ROTATE_TOP_SPEED);
+		gPlayer.player.direction += gPlayer.player.dirVelocity;
 
-	// Do stuff with grabbed trash
-	if (gPlayer.player.grabbedTrash != NO_TRASH) {
-		Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
-		trash->physics.x = gPlayer.physics.x + juCastX(PLAYER_TRASH_DRAW_DISTANCE, -gPlayer.player.direction);
-		trash->physics.y = gPlayer.physics.y + juCastY(PLAYER_TRASH_DRAW_DISTANCE, -gPlayer.player.direction);
-	}
+		// Calculate acceleration vector
+		Vector acceleration = {};
+		if (juKeyboardGetKey(SDL_SCANCODE_SPACE)) {
+			acceleration.magnitude = PLAYER_BASE_ACCELERATION;
+			acceleration.direction = gPlayer.player.direction;
+		} else {
+			acceleration.magnitude = PLAYER_FRICTION;
+			acceleration.direction = gPlayer.physics.velocity.direction + VK2D_PI;
+		}
 
-	physicsUpdate(&gPlayer.physics, &acceleration);
+		// Check if the player grabs some trash
+		if (juKeyboardGetKeyPressed(SDL_SCANCODE_LSHIFT)) {
+			for (int i = 0; i < gPopulation.size && gPlayer.player.grabbedTrash == NO_TRASH; i++) {
+				if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH &&
+					juPointDistance(gPlayer.physics.x, gPlayer.physics.y, gPopulation.entities[i].physics.x,
+									gPopulation.entities[i].physics.y) < PLAYER_BASE_TRASH_GRAB_DISTANCE) {
+					gPlayer.player.grabbedTrash = i;
+					gPopulation.entities[i].trash.grabbed = true;
+				}
+			}
+		} else if (juKeyboardGetKeyReleased(SDL_SCANCODE_LSHIFT) && gPlayer.player.grabbedTrash != NO_TRASH) {
+			Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
+			trash->physics.velocity.direction = gPlayer.player.direction;
+			trash->physics.velocity.magnitude = PLAYER_BASE_TRASH_THROW_SPEED;
+			trash->trash.grabbed = false;
+			gPlayer.player.grabbedTrash = NO_TRASH;
+		}
+
+		// Do stuff with grabbed trash
+		if (gPlayer.player.grabbedTrash != NO_TRASH) {
+			Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
+			trash->physics.x = gPlayer.physics.x + juCastX(PLAYER_TRASH_DRAW_DISTANCE, -gPlayer.player.direction);
+			trash->physics.y = gPlayer.physics.y + juCastY(PLAYER_TRASH_DRAW_DISTANCE, -gPlayer.player.direction);
+		}
+
+		// IFrames
+		if (gPlayer.player.iframes > 0)
+			gPlayer.player.iframes -= 1;
+
+		physicsUpdate(&gPlayer.physics, &acceleration);
+	} else {
+		// Dying animation
+		gPlayer.player.direction += PLAYER_DYING_ROTATE_SPEED;
+		physicsUpdate(&gPlayer.physics, NULL);
+	}
 }
 
 void playerDraw() {
@@ -426,11 +472,22 @@ void playerDraw() {
 		player = gAssets->texPlayerThruster;
 	else
 		player = gAssets->texPlayer;
-	vk2dDrawTextureExt(player, gPlayer.physics.x - (player->img->width / 2), gPlayer.physics.y - (player->img->height / 2), 1, 1, gPlayer.player.direction + (VK2D_PI / 2), player->img->width / 2, player->img->height / 2);
+
+	// Account for iframe blinking
+	if (gPlayer.player.iframes <= 0 || (gPlayer.player.iframes / PLAYER_DAMAGED_BLINKING_INTERVAL) % 2 == 0)
+		vk2dDrawTextureExt(player, gPlayer.physics.x - (player->img->width / 2), gPlayer.physics.y - (player->img->height / 2), 1, 1, gPlayer.player.direction + (VK2D_PI / 2), player->img->width / 2, player->img->height / 2);
 }
 
 void playerEnd() {
 
+}
+
+void playerTakeDamage(Entity *entity) {
+	if (gPlayer.player.hp > 0 && gPlayer.player.iframes <= 0) {
+		gPlayer.player.hp -= 1;
+		gPlayer.player.iframes = PLAYER_DAMAGED_IFRAMES;
+		gPlayer.physics.velocity = entity->physics.velocity;
+	}
 }
 
 /********************* Game functions *********************/
