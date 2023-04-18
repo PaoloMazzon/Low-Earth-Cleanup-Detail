@@ -71,6 +71,10 @@ const real TRASH_PLAYER_DIRECTION_ACCURACY = VK2D_PI * 0.1;
 const int  TRASH_LIFETIME                  = FPS_LIMIT * 15;
 const int  TRASH_FADE_OUT_TIME             = FPS_LIMIT * 3;
 const real TRASH_SPAWN_DISTANCE            = 1000;
+#define    TRASH_MAX                         ((int)4000)
+const real TRASH_SPAWN_INTERVAL            = 0.3; // trash spawns every TRASH_SPAWN_INTERVAL seconds
+const real TRASH_MIN_VALUE                 = 0.15;
+const real TRASH_MAX_VALUE                 = 2;
 
 const real DRONE_BASE_ACCELERATION        = 0.15;
 const int  DRONE_DYING_TIMER              = FPS_LIMIT * 3;
@@ -79,10 +83,16 @@ const real DRONE_TRASH_COLLISION_DISTANCE = 100;
 const real DRONE_SPAWN_DISTANCE           = 2000;
 const real DRONE_DYING_SPEED              = 3;
 const real DRONE_DAMAGE_RADIUS            = 150;
+const real DRONE_SPAWN_INTERVAL           = 10; // trash spawns every TRASH_SPAWN_INTERVAL seconds
+const real DRONE_MAX_INTERVAL             = 50; // how many seconds between the max number of enemies increases
 
-const real GARBAGE_DISPOSAL_START_X       = PLAYER_START_X + 1000;
-const real GARBAGE_DISPOSAL_START_Y       = PLAYER_START_Y;
-const real GARBAGE_DISPOSAL_PICKUP_RADIUS = 300;
+const real GARBAGE_DISPOSAL_START_X        = PLAYER_START_X + 1000;
+const real GARBAGE_DISPOSAL_START_Y        = PLAYER_START_Y;
+const real GARBAGE_DISPOSAL_GRAVITY_RADIUS = 300;
+const real GARBAGE_DISPOSAL_GRAB_RADIUS    = 50;
+const real GARBAGE_DISPOSAL_GRAVITY        = 5;
+const real GARBAGE_DISPOSAL_WIDTH          = 100;
+const real GARBAGE_DISPOSAL_HEIGHT         = 100;
 
 /********************* Structs **********************/
 
@@ -122,6 +132,10 @@ typedef struct {
 	real dyingRotation;
 } Drone;
 
+typedef struct {
+	VK2DTexture surface;
+} GarbageDisposal;
+
 // Any kind of entity in the world
 typedef struct {
 	entitytype type; // entities can delete themselves by setting this to ENTITY_TYPE_NONE
@@ -130,6 +144,7 @@ typedef struct {
 		Player player;
 		Trash trash;
 		Drone drone;
+		GarbageDisposal garbageDisposal;
 	};
 } Entity;
 
@@ -142,12 +157,25 @@ typedef struct {
 /********************* Globals *********************/
 Assets *gAssets = NULL;
 VK2DCameraIndex gCam = -1;
+VK2DCameraIndex g3DCam = -1;
 Entity gPlayer = {ENTITY_TYPE_PLAYER};
 int gGarbageDisposal = -1;
 real gZoom = 1;
 JUFont gFont = NULL;
 Population gPopulation = {};
 real gScore = 0;
+VK2DModel gGarbageModel;
+real gLastGarbageTime = 0;
+real gLastEnemyTime = 0;
+int gEnemyCount;
+int gEnemyMax = 1;
+real gEnemyCountLastTime = 0;
+VK2DShader gShader = NULL;
+
+// Expirimental
+VK2DDrawInstance gEntityBuffer1[TRASH_MAX];
+VK2DDrawInstance gEntityBuffer2[TRASH_MAX];
+VK2DDrawInstance *gEntityBuffers[] = {gEntityBuffer1, gEntityBuffer2};
 
 /********************* Common functions *********************/
 // Returns a real from 0-1
@@ -171,17 +199,17 @@ void drawTiledBackground(VK2DTexture texture, float rate) {
 	// Figure out how many tiles we need to draw and where to start drawing
 	float tileStartX = camera.x * rate;
 	float tileStartY = camera.y * rate;
-	tileStartX += floorf((camera.x - tileStartX) / texture->img->width) * texture->img->width;
-	tileStartY += floorf((camera.y - tileStartY) / texture->img->height) * texture->img->height;
+	tileStartX += floorf((camera.x - tileStartX) / vk2dTextureWidth(texture)) * vk2dTextureWidth(texture);
+	tileStartY += floorf((camera.y - tileStartY) / vk2dTextureHeight(texture)) * vk2dTextureHeight(texture);
 	//while (tileStartX + texture->img->width < camera.x) tileStartX += texture->img->width;
 	//while (tileStartY + texture->img->height < camera.y) tileStartY += texture->img->height;
-	float tilesNeededHorizontal = ceilf(camera.w / texture->img->width) + 1;
-	float tilesNeededVertical = ceilf(camera.h / texture->img->height) + 1;
+	float tilesNeededHorizontal = ceilf(camera.w / vk2dTextureWidth(texture)) + 1;
+	float tilesNeededVertical = ceilf(camera.h / vk2dTextureHeight(texture)) + 1;
 
 	// Loop through and draw them all
 	for (int y = 0; y < tilesNeededVertical; y++)
 		for (int x = 0; x < tilesNeededHorizontal; x++)
-			vk2dDrawTexture(texture, tileStartX + (x * texture->img->width), tileStartY + (y * texture->img->height));
+			vk2dDrawTexture(texture, tileStartX + (x * vk2dTextureWidth(texture)), tileStartY + (y * vk2dTextureHeight(texture)));
 }
 
 /********************* Physics functions *********************/
@@ -250,6 +278,16 @@ void trashUpdate(Entity *entity) {
 		entity->trash.framesLeftAlive = TRASH_LIFETIME;
 	}
 
+	// Check if we are in the trash disposal
+	Entity *garbage = &gPopulation.entities[gGarbageDisposal];
+	real dist = juPointDistance(entity->physics.x, entity->physics.y, garbage->physics.x, garbage->physics.y);
+	if (dist > GARBAGE_DISPOSAL_GRAB_RADIUS && dist < GARBAGE_DISPOSAL_GRAVITY_RADIUS) {
+		// Move towards the garbage disposal
+
+	} else if (dist < GARBAGE_DISPOSAL_GRAB_RADIUS) {
+		// Start the garbage spin animation
+	}
+
 	// Check if we were thrown and as such check if we hit any enemies
 	if (entity->physics.velocity.magnitude == PLAYER_BASE_TRASH_THROW_SPEED) {
 		for (int i = 0; i < gPopulation.size && entity->physics.velocity.magnitude == PLAYER_BASE_TRASH_THROW_SPEED; i++) {
@@ -267,8 +305,8 @@ void trashUpdate(Entity *entity) {
 	vec4 alpha = {1, 1, 1, 1};
 	if (entity->trash.framesLeftAlive <= TRASH_FADE_OUT_TIME)
 		alpha[3] = (float)entity->trash.framesLeftAlive / (float)TRASH_FADE_OUT_TIME;
-	float originX = entity->trash.tex->img->width / 2;
-	float originY = entity->trash.tex->img->height / 2;
+	float originX = vk2dTextureWidth(entity->trash.tex) / 2;
+	float originY = vk2dTextureHeight(entity->trash.tex) / 2;
 	vk2dRendererSetColourMod(alpha);
 	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - originX, entity->physics.y - originY, alpha[3], alpha[3], entity->trash.rot, originX, originY);
 	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
@@ -280,6 +318,7 @@ void droneStart(Entity *entity) {
 	// Zero entity
 	memset(entity, 0, sizeof(Entity));
 	entity->type = ENTITY_TYPE_DRONE;
+	gEnemyCount++;
 
 	// Spawn off screen
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -295,11 +334,12 @@ void droneStart(Entity *entity) {
 void droneEnd(Entity *entity) {
 	entity->drone.dying = true;
 	entity->drone.dyingTimer = DRONE_DYING_TIMER;
+	gEnemyCount--;
 }
 
 void droneUpdate(Entity *entity) {
-	float originX = gAssets->texDrone->img->width / 2;
-	float originY = gAssets->texDrone->img->height / 2;
+	float originX = vk2dTextureWidth(gAssets->texDrone) / 2;
+	float originY = vk2dTextureHeight(gAssets->texDrone) / 2;
 	if (!entity->drone.dying) {
 		// Accelerate towards the player
 		Vector acceleration = {DRONE_BASE_ACCELERATION, (VK2D_PI / 2) - juPointAngle(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y) - (VK2D_PI / 2)};
@@ -348,14 +388,26 @@ void garbageDisposalStart(Entity *entity) {
 	memset(entity, 0, sizeof(Entity));
 	entity->type = ENTITY_TYPE_GARBAGE_DISPOSAL;
 	physicsStart(&entity->physics, GARBAGE_DISPOSAL_START_X, GARBAGE_DISPOSAL_START_Y);
+	entity->garbageDisposal.surface = vk2dTextureCreate(GARBAGE_DISPOSAL_WIDTH, GARBAGE_DISPOSAL_HEIGHT);
 }
 
 void garbageDisposalUpdate(Entity *entity) {
-	vk2dDrawTexture(gAssets->texGarbageDisposal, entity->physics.x - (gAssets->texGarbageDisposal->img->width / 2), entity->physics.y - (gAssets->texGarbageDisposal->img->height / 2));
+	vk2dRendererSetTarget(entity->garbageDisposal.surface);
+	vk2dRendererEmpty();
+	vk2dRendererLockCameras(g3DCam);
+	vec3 axis = {0, 1, 0};
+	vk2dRendererDrawModel(gGarbageModel, 0, 0, 0, 1, 1, 1, sin(juTime() * 0.5) * 0.5, axis, 0, 0, 0);
+	vk2dRendererLockCameras(gCam);
+	vk2dRendererSetTarget(VK2D_TARGET_SCREEN);
+	float scale = 6;
+	float s = juTime() * 5;
+	vk2dRendererDrawShader(gShader, &s, entity->garbageDisposal.surface, entity->physics.x - ((vk2dTextureWidth(entity->garbageDisposal.surface) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(entity->garbageDisposal.surface) * scale) / 2), scale, scale, 0, 0, 0, 0, 0, vk2dTextureWidth(entity->garbageDisposal.surface), vk2dTextureHeight(entity->garbageDisposal.surface));
+	vk2dDrawTextureExt(entity->garbageDisposal.surface, entity->physics.x - ((vk2dTextureWidth(entity->garbageDisposal.surface) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(entity->garbageDisposal.surface) * scale) / 2), scale, scale, 0, 0, 0);
 }
 
 void garbageDisposalEnd(Entity *entity) {
-
+	vk2dRendererWait();
+	vk2dTextureFree(entity->garbageDisposal.surface);
 }
 
 /********************* Population functions *********************/
@@ -399,6 +451,17 @@ void popUpdateEntities() {
 }
 
 void popEnd() {
+	for (int i = 0; i < gPopulation.size; i++) {
+		if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH) {
+			trashEnd(&gPopulation.entities[i]);
+		} else if (gPopulation.entities[i].type == ENTITY_TYPE_DRONE) {
+			droneEnd(&gPopulation.entities[i]);
+		} else if (gPopulation.entities[i].type == ENTITY_TYPE_MINE) {
+			mineEnd(&gPopulation.entities[i]);
+		} else if (gPopulation.entities[i].type == ENTITY_TYPE_GARBAGE_DISPOSAL) {
+			garbageDisposalEnd(&gPopulation.entities[i]);
+		}
+	}
 	free(gPopulation.entities);
 }
 
@@ -488,8 +551,12 @@ void playerDraw() {
 		player = gAssets->texPlayer;
 
 	// Account for iframe blinking
-	if (gPlayer.player.iframes <= 0 || (gPlayer.player.iframes / PLAYER_DAMAGED_BLINKING_INTERVAL) % 2 == 0)
-		vk2dDrawTextureExt(player, gPlayer.physics.x - (player->img->width / 2), gPlayer.physics.y - (player->img->height / 2), 1, 1, gPlayer.player.direction + (VK2D_PI / 2), player->img->width / 2, player->img->height / 2);
+	if (gPlayer.player.iframes <= 0 || (gPlayer.player.iframes / PLAYER_DAMAGED_BLINKING_INTERVAL) % 2 == 0) {
+		vk2dDrawTextureExt(player, gPlayer.physics.x - (vk2dTextureWidth(player) / 2),
+						   gPlayer.physics.y - (vk2dTextureHeight(player) / 2), 1, 1,
+						   gPlayer.player.direction + (VK2D_PI / 2), vk2dTextureWidth(player) / 2,
+						   vk2dTextureHeight(player) / 2);
+	}
 }
 
 void playerEnd() {
@@ -515,8 +582,8 @@ void gameDrawUI() {
 	// Point to garbage disposal
 	if (juPointDistance(gPlayer.physics.x, gPlayer.physics.y, gd->physics.x, gd->physics.y) > gameWorldCameraSpec.h / 2) {
 		float angle = juPointAngle(gPlayer.physics.x, gPlayer.physics.y, gd->physics.x, gd->physics.y);
-		float originX = gAssets->texArrow->img->width / 2;
-		float originY = gAssets->texArrow->img->height / 2;
+		float originX = vk2dTextureWidth(gAssets->texArrow) / 2;
+		float originY = vk2dTextureHeight(gAssets->texArrow) / 2;
 		float x = (spec.x + (spec.w / 2)) + juCastX((spec.w / 2) - originX, angle);
 		float y = (spec.y + (spec.h / 2)) + juCastY((spec.h / 2) - originY, angle);
 		vk2dDrawTextureExt(gAssets->texArrow, x - originX, y - originY, 1, 1, -angle + (VK2D_PI / 2), originX, originY);
@@ -524,7 +591,7 @@ void gameDrawUI() {
 
 	// Player life
 	for (int i = 0; i < gPlayer.player.hp; i++) {
-		vk2dDrawTexture(gAssets->texHP, 10 + (i * gAssets->texHP->img->width), 10);
+		vk2dDrawTexture(gAssets->texHP, 10 + (i * vk2dTextureWidth(gAssets->texHP)), 10);
 	}
 
 	// Score
@@ -569,11 +636,20 @@ void gameStart() {
 }
 
 gamestate gameUpdate() {
-	// TODO: Make trash automatically spawn
-	if (juKeyboardGetKey(SDL_SCANCODE_RETURN))
+	real time = juTime();
+	if (time - gLastGarbageTime >= TRASH_SPAWN_INTERVAL) {
+		gLastGarbageTime = time;
 		trashStart(popGetNewEntity(NULL));
-	if (juKeyboardGetKeyPressed(SDL_SCANCODE_P))
-		droneStart(popGetNewEntity(NULL));
+	}
+	if (time - gLastEnemyTime >= DRONE_SPAWN_INTERVAL) {
+		gLastEnemyTime = time;
+		if (gEnemyCount < gEnemyMax) {
+			droneStart(popGetNewEntity(NULL));
+		} else if (time - gEnemyCountLastTime >= DRONE_MAX_INTERVAL) {
+			gEnemyCountLastTime = time;
+			gEnemyMax++;
+		}
+	}
 
 	// Update camera around player
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -629,9 +705,9 @@ int main() {
 	// Initialize a billion things
 	SDL_Window *window = SDL_CreateWindow("VK2D", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 	SDL_Event e;
-	VK2DRendererConfig config = {msaa_32x, sm_TripleBuffer, ft_Nearest};
+	VK2DRendererConfig config = {VK2D_MSAA_1X, VK2D_SCREEN_MODE_TRIPLE_BUFFER, VK2D_FILTER_TYPE_NEAREST};
 	juInit(window, 3, 1);
-	vk2dRendererInit(window, config);
+	vk2dRendererInit(window, config, NULL);
 	vec4 clearColour = {0, 0, 13.0/255.0, 1}; // Black
 	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
 	bool stopRunning = false;
@@ -640,11 +716,18 @@ int main() {
 	double average = 1;
 	JUClock framerateTimer;
 	juClockReset(&framerateTimer);
-	VK2DCameraSpec spec = {ct_Default, PLAYER_START_X - (GAME_WIDTH / 2), PLAYER_START_Y - (GAME_HEIGHT / 2), WINDOW_WIDTH, WINDOW_HEIGHT, 1, 0, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
+	VK2DCameraSpec spec = {VK2D_CAMERA_TYPE_DEFAULT, PLAYER_START_X - (GAME_WIDTH / 2), PLAYER_START_Y - (GAME_HEIGHT / 2), WINDOW_WIDTH, WINDOW_HEIGHT, 1, 0, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
+	VK2DCameraSpec spec3D = {VK2D_CAMERA_TYPE_PERSPECTIVE, 0, 0, GARBAGE_DISPOSAL_WIDTH, GARBAGE_DISPOSAL_HEIGHT, 1};
+	spec3D.Perspective.fov = VK2D_PI * 0.2;
+	spec3D.Perspective.eyes[2] = 3;
+	spec3D.Perspective.up[1] = 1;
 	gCam = vk2dCameraCreate(spec);
+	g3DCam = vk2dCameraCreate(spec3D);
 	gAssets = buildAssets();
 	gFont = juFontLoadFromImage("assets/Font.png", 32, 128, FONT_WIDTH, FONT_HEIGHT);
 	gamestate state = GAMESTATE_MENU;
+	gGarbageModel = vk2dModelLoad("assets/GarbageDisposal.obj", gAssets->texGarbageDisposal);
+	gShader = vk2dShaderLoad("assets/tex.vert.spv", "assets/tex.frag.spv", 4);
 	menuStart();
 	JUClock fpsLock;
 	juClockStart(&fpsLock);
@@ -715,6 +798,8 @@ int main() {
 	// Cleanup
 	vk2dRendererWait();
 	juFontFree(gFont);
+	vk2dModelFree(gGarbageModel);
+	vk2dShaderFree(gShader);
 	destroyAssets(gAssets);
 	juQuit();
 	vk2dRendererQuit();
