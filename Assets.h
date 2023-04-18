@@ -3,7 +3,7 @@
 #include "JamUtil.h"
 
 // Forward declare the asset array
-extern JULoadedAsset ASSETS[14];
+extern JULoadedAsset ASSETS[16];
 
 #ifdef ASSETS_IMPLEMENTATION
 JULoadedAsset ASSETS[] = {
@@ -12,6 +12,8 @@ JULoadedAsset ASSETS[] = {
     {"assets/Drone.png"},
     {"assets/Font.png"},
     {"assets/Foreground.png"},
+    {"assets/GarbageDisposal.mtl"},
+    {"assets/GarbageDisposal.obj"},
     {"assets/GarbageDisposal.png"},
     {"assets/HP.png"},
     {"assets/Midground.png"},
@@ -31,6 +33,7 @@ typedef struct Assets {
     VK2DTexture texDrone;
     VK2DTexture texFont;
     VK2DTexture texForeground;
+    JUBuffer bufGarbageDisposal;
     VK2DTexture texGarbageDisposal;
     VK2DTexture texHP;
     VK2DTexture texMidground;
@@ -49,12 +52,14 @@ void destroyAssets(Assets *s);
 #ifdef ASSETS_IMPLEMENTATION
 Assets *buildAssets() {
     Assets *s = malloc(sizeof(struct Assets));
-    s->loader = juLoaderCreate(ASSETS, 14);
+    s->loader = juLoaderCreate(ASSETS, 16);
     s->texArrow = juLoaderGetTexture(s->loader, "assets/Arrow.png");
     s->texBackground = juLoaderGetTexture(s->loader, "assets/Background.png");
     s->texDrone = juLoaderGetTexture(s->loader, "assets/Drone.png");
     s->texFont = juLoaderGetTexture(s->loader, "assets/Font.png");
     s->texForeground = juLoaderGetTexture(s->loader, "assets/Foreground.png");
+    s->bufGarbageDisposal = juLoaderGetBuffer(s->loader, "assets/GarbageDisposal.mtl");
+    s->bufGarbageDisposal = juLoaderGetBuffer(s->loader, "assets/GarbageDisposal.obj");
     s->texGarbageDisposal = juLoaderGetTexture(s->loader, "assets/GarbageDisposal.png");
     s->texHP = juLoaderGetTexture(s->loader, "assets/HP.png");
     s->texMidground = juLoaderGetTexture(s->loader, "assets/Midground.png");

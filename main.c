@@ -38,6 +38,7 @@ const int   FONT_WIDTH     = 40;
 const int   FONT_HEIGHT    = 70;
 const float CAMERA_SPEED   = 0.2;
 const int   NO_TRASH       = -1;
+const bool  DEBUG          = false;
 
 const real WORLD_MAX_WIDTH  = 60000;
 const real WORLD_MAX_HEIGHT = 60000;
@@ -88,9 +89,9 @@ const real DRONE_MAX_INTERVAL             = 50; // how many seconds between the 
 
 const real GARBAGE_DISPOSAL_START_X        = PLAYER_START_X + 1000;
 const real GARBAGE_DISPOSAL_START_Y        = PLAYER_START_Y;
-const real GARBAGE_DISPOSAL_GRAVITY_RADIUS = 300;
+const real GARBAGE_DISPOSAL_GRAVITY_RADIUS = 500;
 const real GARBAGE_DISPOSAL_GRAB_RADIUS    = 50;
-const real GARBAGE_DISPOSAL_GRAVITY        = 5;
+const real GARBAGE_DISPOSAL_GRAVITY        = 3;
 const real GARBAGE_DISPOSAL_WIDTH          = 100;
 const real GARBAGE_DISPOSAL_HEIGHT         = 100;
 
@@ -124,6 +125,8 @@ typedef struct {
 	real rot;
 	real rotSpeed;
 	bool grabbed;
+	bool trashAnimation;
+	bool wasThrown;
 } Trash;
 
 typedef struct {
@@ -246,6 +249,8 @@ void trashStart(Entity *entity) {
 	entity->trash.rot = 0;
 	entity->trash.framesLeftAlive = TRASH_LIFETIME;
 	entity->trash.grabbed = false;
+	entity->trash.trashAnimation = false;
+	entity->trash.wasThrown = false;
 
 	// Physics
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -267,9 +272,26 @@ void trashEnd(Entity *entity) {
 
 void droneEnd(Entity *entity);
 void trashUpdate(Entity *entity) {
+	Entity *garbage = &gPopulation.entities[gGarbageDisposal];
+	real dist = juPointDistance(entity->physics.x, entity->physics.y, garbage->physics.x, garbage->physics.y);
+
 	// Updating
 	if (!entity->trash.grabbed) {
-		physicsUpdate(&entity->physics, NULL);
+		if (dist > GARBAGE_DISPOSAL_GRAB_RADIUS && dist < GARBAGE_DISPOSAL_GRAVITY_RADIUS && entity->trash.wasThrown) {
+			real angle = (VK2D_PI / 2) - juPointAngle(entity->physics.x, entity->physics.y, garbage->physics.x, garbage->physics.y) - (VK2D_PI / 2);
+			real speed = GARBAGE_DISPOSAL_GRAVITY;
+			Vector gravity;
+			gravity.direction = angle;
+			gravity.magnitude = speed;
+			physicsUpdate(&entity->physics, &gravity);
+		} else if (dist < GARBAGE_DISPOSAL_GRAB_RADIUS && entity->trash.wasThrown && !entity->trash.trashAnimation) {
+			// Start the garbage spin animation
+			entity->trash.trashAnimation = true;
+			gScore += randomRangeReal(TRASH_MIN_VALUE, TRASH_MAX_VALUE);
+			entity->trash.framesLeftAlive = TRASH_FADE_OUT_TIME;
+		} else {
+			physicsUpdate(&entity->physics, NULL);
+		}
 		entity->trash.rot += entity->trash.rotSpeed;
 		entity->trash.framesLeftAlive -= 1;
 		if (entity->trash.framesLeftAlive <= 0)
@@ -278,18 +300,14 @@ void trashUpdate(Entity *entity) {
 		entity->trash.framesLeftAlive = TRASH_LIFETIME;
 	}
 
-	// Check if we are in the trash disposal
-	Entity *garbage = &gPopulation.entities[gGarbageDisposal];
-	real dist = juPointDistance(entity->physics.x, entity->physics.y, garbage->physics.x, garbage->physics.y);
-	if (dist > GARBAGE_DISPOSAL_GRAB_RADIUS && dist < GARBAGE_DISPOSAL_GRAVITY_RADIUS) {
-		// Move towards the garbage disposal
-
-	} else if (dist < GARBAGE_DISPOSAL_GRAB_RADIUS) {
-		// Start the garbage spin animation
+	// If the trash is in the dying animation just spin out in the garbage disposal
+	if (entity->trash.trashAnimation) {
+		entity->physics.x = garbage->physics.x;
+		entity->physics.y = garbage->physics.y;
 	}
 
 	// Check if we were thrown and as such check if we hit any enemies
-	if (entity->physics.velocity.magnitude == PLAYER_BASE_TRASH_THROW_SPEED) {
+	if (entity->trash.wasThrown) {
 		for (int i = 0; i < gPopulation.size && entity->physics.velocity.magnitude == PLAYER_BASE_TRASH_THROW_SPEED; i++) {
 			Entity *drone = &gPopulation.entities[i];
 			if (drone->type == ENTITY_TYPE_DRONE && !drone->drone.dying && juPointDistance(entity->physics.x, entity->physics.y, drone->physics.x, drone->physics.y) < DRONE_TRASH_COLLISION_DISTANCE) {
@@ -305,11 +323,17 @@ void trashUpdate(Entity *entity) {
 	vec4 alpha = {1, 1, 1, 1};
 	if (entity->trash.framesLeftAlive <= TRASH_FADE_OUT_TIME)
 		alpha[3] = (float)entity->trash.framesLeftAlive / (float)TRASH_FADE_OUT_TIME;
-	float originX = vk2dTextureWidth(entity->trash.tex) / 2;
-	float originY = vk2dTextureHeight(entity->trash.tex) / 2;
+	float drawOriginX = (vk2dTextureWidth(entity->trash.tex) / 2) - ((1 - alpha[3]) * (vk2dTextureWidth(entity->trash.tex) / 2));
+	float drawOriginY = (vk2dTextureHeight(entity->trash.tex) / 2) - ((1 - alpha[3]) * (vk2dTextureHeight(entity->trash.tex) / 2));
+	float originX = (vk2dTextureWidth(entity->trash.tex) / 2);
+	float originY = (vk2dTextureHeight(entity->trash.tex) / 2);
 	vk2dRendererSetColourMod(alpha);
-	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - originX, entity->physics.y - originY, alpha[3], alpha[3], entity->trash.rot, originX, originY);
+	vk2dDrawTextureExt(entity->trash.tex, entity->physics.x - drawOriginX, entity->physics.y - drawOriginY, alpha[3], alpha[3], entity->trash.rot, originX, originY);
 	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
+
+	if (DEBUG) {
+		vk2dDrawCircle(entity->physics.x, entity->physics.y, 4);
+	}
 }
 
 /********************* Drone functions *********************/
@@ -354,6 +378,11 @@ void droneUpdate(Entity *entity) {
 
 		// Draw
 		vk2dDrawTextureExt(gAssets->texDrone, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->physics.velocity.direction, originX, originY);
+
+		if (DEBUG) {
+			vk2dDrawCircleOutline(entity->physics.x, entity->physics.y, DRONE_DAMAGE_RADIUS, 1);
+			vk2dDrawCircle(entity->physics.x, entity->physics.y, 4);
+		}
 	} else {
 		// Dying animation
 		physicsUpdate(&entity->physics, NULL);
@@ -403,6 +432,12 @@ void garbageDisposalUpdate(Entity *entity) {
 	float s = juTime() * 5;
 	vk2dRendererDrawShader(gShader, &s, entity->garbageDisposal.surface, entity->physics.x - ((vk2dTextureWidth(entity->garbageDisposal.surface) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(entity->garbageDisposal.surface) * scale) / 2), scale, scale, 0, 0, 0, 0, 0, vk2dTextureWidth(entity->garbageDisposal.surface), vk2dTextureHeight(entity->garbageDisposal.surface));
 	vk2dDrawTextureExt(entity->garbageDisposal.surface, entity->physics.x - ((vk2dTextureWidth(entity->garbageDisposal.surface) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(entity->garbageDisposal.surface) * scale) / 2), scale, scale, 0, 0, 0);
+
+	if (DEBUG) {
+		vk2dDrawCircle(entity->physics.x, entity->physics.y, 4);
+		vk2dDrawCircleOutline(entity->physics.x, entity->physics.y, GARBAGE_DISPOSAL_GRAVITY_RADIUS, 1);
+		vk2dDrawCircleOutline(entity->physics.x, entity->physics.y, GARBAGE_DISPOSAL_GRAB_RADIUS, 1);
+	}
 }
 
 void garbageDisposalEnd(Entity *entity) {
@@ -458,10 +493,9 @@ void popEnd() {
 			droneEnd(&gPopulation.entities[i]);
 		} else if (gPopulation.entities[i].type == ENTITY_TYPE_MINE) {
 			mineEnd(&gPopulation.entities[i]);
-		} else if (gPopulation.entities[i].type == ENTITY_TYPE_GARBAGE_DISPOSAL) {
-			garbageDisposalEnd(&gPopulation.entities[i]);
 		}
 	}
+	garbageDisposalEnd(&gPopulation.entities[gGarbageDisposal]);
 	free(gPopulation.entities);
 }
 
@@ -520,6 +554,7 @@ void playerUpdate() {
 			Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
 			trash->physics.velocity.direction = gPlayer.player.direction;
 			trash->physics.velocity.magnitude = PLAYER_BASE_TRASH_THROW_SPEED;
+			trash->trash.wasThrown = true;
 			trash->trash.grabbed = false;
 			gPlayer.player.grabbedTrash = NO_TRASH;
 		}
@@ -556,6 +591,11 @@ void playerDraw() {
 						   gPlayer.physics.y - (vk2dTextureHeight(player) / 2), 1, 1,
 						   gPlayer.player.direction + (VK2D_PI / 2), vk2dTextureWidth(player) / 2,
 						   vk2dTextureHeight(player) / 2);
+	}
+
+	if (DEBUG) {
+		vk2dDrawCircleOutline(gPlayer.physics.x, gPlayer.physics.y, PLAYER_BASE_TRASH_GRAB_DISTANCE, 1);
+		vk2dDrawCircle(gPlayer.physics.x, gPlayer.physics.y, 4);
 	}
 }
 
@@ -681,10 +721,9 @@ gamestate gameUpdate() {
 }
 
 void gameEnd() {
-	garbageDisposalEnd(gGarbageDisposal);
-	gGarbageDisposal = NULL;
-	playerEnd();
 	popEnd();
+	gGarbageDisposal = 0;
+	playerEnd();
 }
 
 /********************* Menu functions *********************/
@@ -801,6 +840,7 @@ int main() {
 	vk2dModelFree(gGarbageModel);
 	vk2dShaderFree(gShader);
 	destroyAssets(gAssets);
+	gameEnd();
 	juQuit();
 	vk2dRendererQuit();
 	SDL_DestroyWindow(window);
