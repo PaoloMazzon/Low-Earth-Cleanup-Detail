@@ -45,8 +45,8 @@ const int   GAME_OVER_DELAY  = FPS_LIMIT * 3;
 const real WORLD_MAX_WIDTH  = 60000;
 const real WORLD_MAX_HEIGHT = 60000;
 
-const real SUN_POS_X = 400;
-const real SUN_POS_Y = 400;
+const real SUN_POS_X = -600;
+const real SUN_POS_Y = -600;
 
 const real PLAYER_START_X = WORLD_MAX_WIDTH / 2;
 const real PLAYER_START_Y = WORLD_MAX_HEIGHT / 2;
@@ -139,7 +139,7 @@ typedef struct {
 } Drone;
 
 typedef struct {
-	VK2DTexture surface;
+	// frig
 } GarbageDisposal;
 
 // Any kind of entity in the world
@@ -181,6 +181,7 @@ int gSpawnDelay = 0;
 real gHighscore = 0;
 bool gNewHighscore = false;
 int gGameoverDelay = 0;
+VK2DTexture gGarbageDisposalTexture;
 
 // Expirimental
 VK2DDrawInstance gEntityBuffer1[TRASH_MAX];
@@ -424,21 +425,11 @@ void garbageDisposalStart(Entity *entity) {
 	memset(entity, 0, sizeof(Entity));
 	entity->type = ENTITY_TYPE_GARBAGE_DISPOSAL;
 	physicsStart(&entity->physics, GARBAGE_DISPOSAL_START_X, GARBAGE_DISPOSAL_START_Y);
-	entity->garbageDisposal.surface = vk2dTextureCreate(GARBAGE_DISPOSAL_WIDTH, GARBAGE_DISPOSAL_HEIGHT);
 }
 
 void garbageDisposalUpdate(Entity *entity) {
-	vk2dRendererSetTarget(entity->garbageDisposal.surface);
-	vk2dRendererEmpty();
-	vk2dRendererLockCameras(g3DCam);
-	vec3 axis = {0, 1, 0};
-	vk2dRendererDrawModel(gGarbageModel, 0, 0, 0, 1, 1, 1, sin(juTime() * 0.5) * 0.5, axis, 0, 0, 0);
-	vk2dRendererLockCameras(gCam);
-	vk2dRendererSetTarget(VK2D_TARGET_SCREEN);
 	float scale = 6;
-	float s = juTime() * 5;
-	vk2dRendererDrawShader(gShader, &s, entity->garbageDisposal.surface, entity->physics.x - ((vk2dTextureWidth(entity->garbageDisposal.surface) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(entity->garbageDisposal.surface) * scale) / 2), scale, scale, 0, 0, 0, 0, 0, vk2dTextureWidth(entity->garbageDisposal.surface), vk2dTextureHeight(entity->garbageDisposal.surface));
-	vk2dDrawTextureExt(entity->garbageDisposal.surface, entity->physics.x - ((vk2dTextureWidth(entity->garbageDisposal.surface) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(entity->garbageDisposal.surface) * scale) / 2), scale, scale, 0, 0, 0);
+	vk2dDrawTextureExt(gGarbageDisposalTexture, entity->physics.x - ((vk2dTextureWidth(gGarbageDisposalTexture) * scale) / 2), entity->physics.y - ((vk2dTextureHeight(gGarbageDisposalTexture) * scale) / 2), scale, scale, 0, 0, 0);
 
 	if (DEBUG) {
 		vk2dDrawCircle(entity->physics.x, entity->physics.y, 4);
@@ -449,7 +440,6 @@ void garbageDisposalUpdate(Entity *entity) {
 
 void garbageDisposalEnd(Entity *entity) {
 	vk2dRendererWait();
-	vk2dTextureFree(entity->garbageDisposal.surface);
 }
 
 /********************* Population functions *********************/
@@ -765,7 +755,9 @@ gamestate gameUpdate() {
 
 	// Lock camera to world camera and draw world
 	vk2dRendererLockCameras(gCam);
-	vk2dDrawTexture(gAssets->texSun, spec.x + SUN_POS_X - spec.x * 0.05, spec.y + SUN_POS_Y - spec.y * 0.05);
+	float cx = spec.x + (spec.w / 2);
+	float cy = spec.y + (spec.h / 2);
+	vk2dDrawTexture(gAssets->texSun, cx + SUN_POS_X, cy + SUN_POS_Y);
 	drawTiledBackground(gAssets->texBackground, 0.8);
 	drawTiledBackground(gAssets->texMidground, 0.6);
 	drawTiledBackground(gAssets->texForeground, 0.5);
@@ -796,7 +788,45 @@ void menuStart() {
 }
 
 gamestate menuUpdate() {
-	return GAMESTATE_GAME;
+	// Space background
+	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
+	spec.x += 1;
+	spec.y += 0.5;
+	vk2dCameraUpdate(gCam, spec);
+	vk2dRendererLockCameras(gCam);
+	drawTiledBackground(gAssets->texBackground, 0.8);
+	drawTiledBackground(gAssets->texMidground, 0.6);
+	drawTiledBackground(gAssets->texForeground, 0.5);
+
+	// 2nd layer background
+	vk2dRendererLockCameras(VK2D_DEFAULT_CAMERA);
+	spec = vk2dCameraGetSpec(VK2D_DEFAULT_CAMERA);
+	vec4 blackOverlay = {0, 0, 0, 0.5};
+	vk2dRendererSetColourMod(blackOverlay);
+	vk2dRendererClear();
+	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
+	float scale = 4;
+	vk2dDrawTextureExt(gGarbageDisposalTexture, (spec.w / 2) - ((GARBAGE_DISPOSAL_WIDTH * scale) / 2), (spec.h / 2) - ((GARBAGE_DISPOSAL_HEIGHT * scale) / 2) + (spec.h  * 0.1), scale, scale, 0, 0, 0);
+	float bgscale = spec.h / vk2dTextureHeight(gAssets->textitle);
+	float drawX = (spec.w - (vk2dTextureWidth(gAssets->textitle) * bgscale)) / 2;
+	vk2dDrawTextureExt(gAssets->textitle, drawX, 0, bgscale, bgscale, 0, 0, 0);
+
+	// Text
+	const char *s = "Press space to play";
+	juFontDraw(gFont, (spec.w / 2) - ((strlen(s) * gFont->characters[0].w) / 2), (spec.h / 2) - 30, s);
+
+	if (gHighscore != 0) {
+		char score[100];
+		snprintf(score, 99, "Highscore: $%0.2f", gHighscore);
+		juFontDraw(gFont, drawX + 2, 2, score);
+	}
+
+	if (juKeyboardGetKeyPressed(SDL_SCANCODE_SPACE))
+		return GAMESTATE_GAME;
+	else if (juKeyboardGetKeyPressed(SDL_SCANCODE_ESCAPE))
+		return GAMESTATE_QUIT;
+	else
+		return GAMESTATE_MENU;
 }
 
 void menuEnd() {
@@ -806,7 +836,7 @@ void menuEnd() {
 /********************* Main *********************/
 int main() {
 	// Initialize a billion things
-	SDL_Window *window = SDL_CreateWindow("VK2D", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+	SDL_Window *window = SDL_CreateWindow("LECD", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 	SDL_Event e;
 	VK2DRendererConfig config = {VK2D_MSAA_1X, VK2D_SCREEN_MODE_TRIPLE_BUFFER, VK2D_FILTER_TYPE_NEAREST};
 	juInit(window, 3, 1);
@@ -831,8 +861,10 @@ int main() {
 	gamestate state = GAMESTATE_MENU;
 	gGarbageModel = vk2dModelLoad("assets/GarbageDisposal.obj", gAssets->texGarbageDisposal);
 	gShader = vk2dShaderLoad("assets/tex.vert.spv", "assets/tex.frag.spv", 4);
+	gGarbageDisposalTexture = vk2dTextureCreate(GARBAGE_DISPOSAL_WIDTH, GARBAGE_DISPOSAL_HEIGHT);
 	menuStart();
 	JUClock fpsLock;
+	gZoom = ZOOM_MAX;
 	juClockStart(&fpsLock);
 
 	// Game loop, just calls either menu or game update and swaps between them when necessary
@@ -865,6 +897,14 @@ int main() {
 		vk2dCameraUpdate(VK2D_DEFAULT_CAMERA, spec);
 
 		vk2dRendererStartFrame(clearColour);
+
+		vk2dRendererSetTarget(gGarbageDisposalTexture);
+		vk2dRendererEmpty();
+		vk2dRendererLockCameras(g3DCam);
+		vec3 axis = {0, 1, 0};
+		vk2dRendererDrawModel(gGarbageModel, 0, 0, 0, 1, 1, 1, sin(juTime() * 0.5) * 0.5, axis, 0, 0, 0);
+		vk2dRendererLockCameras(gCam);
+		vk2dRendererSetTarget(VK2D_TARGET_SCREEN);
 
 		if (state == GAMESTATE_MENU) {
 			state = menuUpdate();
@@ -905,6 +945,7 @@ int main() {
 	juFontFree(gFont);
 	vk2dModelFree(gGarbageModel);
 	vk2dShaderFree(gShader);
+	vk2dTextureFree(gGarbageDisposalTexture);
 	destroyAssets(gAssets);
 	juQuit();
 	vk2dRendererQuit();
