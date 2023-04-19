@@ -38,7 +38,7 @@ const int   FONT_WIDTH       = 40;
 const int   FONT_HEIGHT      = 70;
 const float CAMERA_SPEED     = 0.2;
 const int   NO_TRASH         = -1;
-const bool  DEBUG            = true;
+const bool  DEBUG            = false;
 const char  HIGHSCORE_FILE[] = "score.bin";
 const int   GAME_OVER_DELAY  = FPS_LIMIT * 3;
 
@@ -89,6 +89,7 @@ const real DRONE_DAMAGE_RADIUS            = 150;
 const real DRONE_SPAWN_INTERVAL           = 10; // trash spawns every TRASH_SPAWN_INTERVAL seconds
 const real DRONE_MAX_INTERVAL             = 50; // how many seconds between the max number of enemies increases
 const int  DRONE_SPAWN_DELAY              = FPS_LIMIT * 15; // dont start spawning enemies until this far in
+const real DRONE_FIGHTER_CHANCE           = 0.3; // chance for a drone to be a fighter drone
 
 const real GARBAGE_DISPOSAL_START_X        = PLAYER_START_X + 1000;
 const real GARBAGE_DISPOSAL_START_Y        = PLAYER_START_Y;
@@ -136,6 +137,7 @@ typedef struct {
 	bool dying;
 	int dyingTimer;
 	real dyingRotation;
+	bool fighter;
 } Drone;
 
 typedef struct {
@@ -248,6 +250,14 @@ void physicsUpdate(Physics *physics, Vector *acceleration) {
 	physics->y = juClamp(physics->y, 0, WORLD_MAX_HEIGHT);
 }
 
+Vector addVectors(Vector *v1, Vector *v2) {
+	real rise = (sin(v2->direction) * v2->magnitude) + (sin(v1->direction) * v1->magnitude);
+	real run = (cos(v2->direction) * v2->magnitude) + (cos(v1->direction) * v1->magnitude);
+	v1->direction = run == 0 ? 0 : atan2(rise, run);
+	v1->magnitude = sqrt(pow(rise, 2) + pow(run, 2));
+	v1->magnitude = juClamp(v1->magnitude, -PHYSICS_BASE_TOP_SPEED, PHYSICS_BASE_TOP_SPEED);
+}
+
 /********************* Trash functions *********************/
 void trashStart(Entity *entity) {
 	VK2DTexture tex[] = {gAssets->texTrash1, gAssets->texTrash2};
@@ -351,6 +361,7 @@ void droneStart(Entity *entity) {
 	memset(entity, 0, sizeof(Entity));
 	entity->type = ENTITY_TYPE_DRONE;
 	gEnemyCount++;
+	entity->drone.fighter = randomRangeReal(0, 1) < DRONE_FIGHTER_CHANCE;
 
 	// Spawn off screen
 	VK2DCameraSpec spec = vk2dCameraGetSpec(gCam);
@@ -375,7 +386,14 @@ void droneUpdate(Entity *entity) {
 	if (!entity->drone.dying) {
 		// Accelerate towards the player
 		Vector acceleration = {DRONE_BASE_ACCELERATION, (VK2D_PI / 2) - juPointAngle(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y) - (VK2D_PI / 2)};
-		physicsUpdate(&entity->physics, &acceleration);
+		if (!entity->drone.fighter) {
+			physicsUpdate(&entity->physics, &acceleration);
+		} else {
+			float dir = juPointAngle(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y);
+			entity->physics.x += juCastX(PHYSICS_BASE_TOP_SPEED * 0.75, dir);
+			entity->physics.y += juCastY(PHYSICS_BASE_TOP_SPEED * 0.75, dir);
+			entity->physics.velocity.direction = acceleration.direction;
+		}
 
 		// Check if we're damaging the player
 		if (juPointDistance(entity->physics.x, entity->physics.y, gPlayer.physics.x, gPlayer.physics.y) <= DRONE_DAMAGE_RADIUS) {
@@ -385,7 +403,13 @@ void droneUpdate(Entity *entity) {
 		}
 
 		// Draw
+		if (entity->drone.fighter) {
+			vec4 c;
+			vk2dColourHex(c, "#20326e");
+			vk2dRendererSetColourMod(c);
+		}
 		vk2dDrawTextureExt(gAssets->texDrone, entity->physics.x - originX, entity->physics.y - originY, 1, 1, entity->physics.velocity.direction, originX, originY);
+		vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
 
 		if (DEBUG) {
 			vk2dDrawCircleOutline(entity->physics.x, entity->physics.y, DRONE_DAMAGE_RADIUS, 1);
@@ -773,6 +797,8 @@ gamestate gameUpdate() {
 
 	vk2dRendererUnlockCameras();
 
+	if (juKeyboardGetKeyPressed(SDL_SCANCODE_SPACE) && gPlayer.player.hp <= 0 && gGameoverDelay >= GAME_OVER_DELAY)
+		return GAMESTATE_MENU;
 	return GAMESTATE_GAME;
 }
 
