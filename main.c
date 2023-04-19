@@ -26,19 +26,21 @@ typedef enum {
 } entitytype;
 
 /********************* Constants **********************/
-const int   WINDOW_WIDTH   = 1024;
-const int   WINDOW_HEIGHT  = 768;
-const int   GAME_WIDTH     = 1500;
-const int   GAME_HEIGHT    = 1125;
-const real  FPS_LIMIT      = 60;
-const real  ZOOM_MIN       = 0.5;
-const real  ZOOM_MAX       = 2;
-const real  ZOOM_SPEED     = 0.25;
-const int   FONT_WIDTH     = 40;
-const int   FONT_HEIGHT    = 70;
-const float CAMERA_SPEED   = 0.2;
-const int   NO_TRASH       = -1;
-const bool  DEBUG          = false;
+const int   WINDOW_WIDTH     = 1024;
+const int   WINDOW_HEIGHT    = 768;
+const int   GAME_WIDTH       = 1500;
+const int   GAME_HEIGHT      = 1125;
+const real  FPS_LIMIT        = 60;
+const real  ZOOM_MIN         = 0.5;
+const real  ZOOM_MAX         = 2;
+const real  ZOOM_SPEED       = 0.25;
+const int   FONT_WIDTH       = 40;
+const int   FONT_HEIGHT      = 70;
+const float CAMERA_SPEED     = 0.2;
+const int   NO_TRASH         = -1;
+const bool  DEBUG            = true;
+const char  HIGHSCORE_FILE[] = "score.bin";
+const int   GAME_OVER_DELAY  = FPS_LIMIT * 3;
 
 const real WORLD_MAX_WIDTH  = 60000;
 const real WORLD_MAX_HEIGHT = 60000;
@@ -57,7 +59,7 @@ const real PLAYER_BASE_TRASH_THROW_SPEED    = 20; // MUST NOT BE IN THE RANGE OF
 const real PLAYER_TRASH_DRAW_DISTANCE       = 200;
 const int  PLAYER_DAMAGED_IFRAMES           = FPS_LIMIT * 3;
 const int  PLAYER_DAMAGED_BLINKING_INTERVAL = 10;
-const real PLAYER_BASE_ACCELERATION         = 0.10;
+const real PLAYER_BASE_ACCELERATION         = 0.15;
 const real PLAYER_FRICTION                  = 0.02;
 const real PLAYER_BASE_HP                   = 5;
 const real PLAYER_DYING_ROTATE_SPEED        = VK2D_PI * 0.05;
@@ -86,12 +88,13 @@ const real DRONE_DYING_SPEED              = 3;
 const real DRONE_DAMAGE_RADIUS            = 150;
 const real DRONE_SPAWN_INTERVAL           = 10; // trash spawns every TRASH_SPAWN_INTERVAL seconds
 const real DRONE_MAX_INTERVAL             = 50; // how many seconds between the max number of enemies increases
+const int  DRONE_SPAWN_DELAY              = FPS_LIMIT * 15; // dont start spawning enemies until this far in
 
 const real GARBAGE_DISPOSAL_START_X        = PLAYER_START_X + 1000;
 const real GARBAGE_DISPOSAL_START_Y        = PLAYER_START_Y;
-const real GARBAGE_DISPOSAL_GRAVITY_RADIUS = 500;
-const real GARBAGE_DISPOSAL_GRAB_RADIUS    = 50;
-const real GARBAGE_DISPOSAL_GRAVITY        = 3;
+const real GARBAGE_DISPOSAL_GRAVITY_RADIUS = 800;
+const real GARBAGE_DISPOSAL_GRAB_RADIUS    = 100;
+const real GARBAGE_DISPOSAL_GRAVITY        = 0.8;
 const real GARBAGE_DISPOSAL_WIDTH          = 100;
 const real GARBAGE_DISPOSAL_HEIGHT         = 100;
 
@@ -174,6 +177,10 @@ int gEnemyCount;
 int gEnemyMax = 1;
 real gEnemyCountLastTime = 0;
 VK2DShader gShader = NULL;
+int gSpawnDelay = 0;
+real gHighscore = 0;
+bool gNewHighscore = false;
+int gGameoverDelay = 0;
 
 // Expirimental
 VK2DDrawInstance gEntityBuffer1[TRASH_MAX];
@@ -603,15 +610,45 @@ void playerEnd() {
 
 }
 
+bool recordHighscore();
 void playerTakeDamage(Entity *entity) {
 	if (gPlayer.player.hp > 0 && gPlayer.player.iframes <= 0) {
 		gPlayer.player.hp -= 1;
 		gPlayer.player.iframes = PLAYER_DAMAGED_IFRAMES;
 		gPlayer.physics.velocity = entity->physics.velocity;
+
+		// Player just died
+		if (gPlayer.player.hp <= 0) {
+			gNewHighscore = recordHighscore();
+			gGameoverDelay = 0;
+		}
 	}
 }
 
 /********************* Game functions *********************/
+
+// Returns true if a new highscore was recorded
+bool recordHighscore() {
+	if (gScore > gHighscore) {
+		FILE *f = fopen(HIGHSCORE_FILE, "wb");
+		gHighscore = gScore;
+		fwrite(&gHighscore, sizeof(real), 1, f);
+		fclose(f);
+		return true;
+	} else {
+		return false;
+	}
+}
+
+void readHighscore() {
+	FILE *f = fopen(HIGHSCORE_FILE, "rb");
+	if (f != NULL) {
+		fread(&gHighscore, sizeof(real), 1, f);
+		fclose(f);
+	} else {
+		gHighscore = 0;
+	}
+}
 
 void gameDrawUI() {
 	// Get screen w/h
@@ -666,6 +703,23 @@ void gameDrawUI() {
 	vk2dRendererSetColourMod(pointerHypotenuse);
 	vk2dDrawLine(centerX, centerY, centerX + run, centerY + rise); // Hyp
 	vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
+
+	// Draw game over the player died
+	if (gGameoverDelay >= GAME_OVER_DELAY) {
+		vec4 blackOverlay = {0, 0, 0, 0.5};
+		vk2dRendererSetColourMod(blackOverlay);
+		vk2dRendererClear();
+		vk2dRendererSetColourMod(VK2D_DEFAULT_COLOUR_MOD);
+		const char *s = "You're fired.";
+		juFontDraw(gFont, (spec.w / 2) - ((strlen(s) * gFont->characters[0].w) / 2), (spec.h / 2) - 30, s);
+
+		if (gScore == gHighscore) {
+			s = "New highscore!";
+			juFontDraw(gFont, (spec.w / 2) - ((strlen(s) * gFont->characters[0].w) / 2), (spec.h / 2) + 30, s);
+		}
+	} else if (gPlayer.player.hp <= 0) {
+		gGameoverDelay += 1;
+	}
 }
 
 void gameStart() {
@@ -673,6 +727,9 @@ void gameStart() {
 	popInit();
 	playerStart();
 	garbageDisposalStart(popGetNewEntity(&gGarbageDisposal));
+	gSpawnDelay = 0;
+	gLastGarbageTime = juTime();
+	gNewHighscore = false;
 }
 
 gamestate gameUpdate() {
@@ -681,14 +738,21 @@ gamestate gameUpdate() {
 		gLastGarbageTime = time;
 		trashStart(popGetNewEntity(NULL));
 	}
-	if (time - gLastEnemyTime >= DRONE_SPAWN_INTERVAL) {
-		gLastEnemyTime = time;
-		if (gEnemyCount < gEnemyMax) {
-			droneStart(popGetNewEntity(NULL));
-		} else if (time - gEnemyCountLastTime >= DRONE_MAX_INTERVAL) {
-			gEnemyCountLastTime = time;
-			gEnemyMax++;
+
+	// Enemy spawning
+	if (gSpawnDelay >= DRONE_SPAWN_DELAY) {
+		if (time - gLastEnemyTime >= DRONE_SPAWN_INTERVAL) {
+			gLastEnemyTime = time;
+			if (gEnemyCount < gEnemyMax) {
+				droneStart(popGetNewEntity(NULL));
+			} else if (time - gEnemyCountLastTime >= DRONE_MAX_INTERVAL) {
+				gEnemyCountLastTime = time;
+				gEnemyMax++;
+			}
 		}
+	} else {
+		gSpawnDelay++;
+		gLastEnemyTime = juTime();
 	}
 
 	// Update camera around player
@@ -728,7 +792,7 @@ void gameEnd() {
 
 /********************* Menu functions *********************/
 void menuStart() {
-
+	readHighscore();
 }
 
 gamestate menuUpdate() {
@@ -809,6 +873,7 @@ int main() {
 				gameStart();
 			} else if (state == GAMESTATE_QUIT){
 				stopRunning = true;
+				gameEnd();
 			}
 		} else if (state == GAMESTATE_GAME) {
 			state = gameUpdate();
@@ -817,6 +882,7 @@ int main() {
 				menuStart();
 			} else if (state == GAMESTATE_QUIT){
 				stopRunning = true;
+				gameEnd();
 			}
 		}
 
@@ -840,7 +906,6 @@ int main() {
 	vk2dModelFree(gGarbageModel);
 	vk2dShaderFree(gShader);
 	destroyAssets(gAssets);
-	gameEnd();
 	juQuit();
 	vk2dRendererQuit();
 	SDL_DestroyWindow(window);
