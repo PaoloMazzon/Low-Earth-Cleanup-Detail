@@ -507,16 +507,6 @@ void popUpdateEntities() {
 }
 
 void popEnd() {
-	for (int i = 0; i < gPopulation.size; i++) {
-		if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH) {
-			trashEnd(&gPopulation.entities[i]);
-		} else if (gPopulation.entities[i].type == ENTITY_TYPE_DRONE) {
-			droneEnd(&gPopulation.entities[i]);
-		} else if (gPopulation.entities[i].type == ENTITY_TYPE_MINE) {
-			mineEnd(&gPopulation.entities[i]);
-		}
-	}
-	garbageDisposalEnd(&gPopulation.entities[gGarbageDisposal]);
 	free(gPopulation.entities);
 }
 
@@ -553,7 +543,7 @@ void playerUpdate() {
 
 		// Calculate acceleration vector
 		Vector acceleration = {};
-		if (juKeyboardGetKey(SDL_SCANCODE_SPACE)) {
+		if (juKeyboardGetKey(SDL_SCANCODE_W)) {
 			acceleration.magnitude = PLAYER_BASE_ACCELERATION;
 			acceleration.direction = gPlayer.player.direction;
 		} else {
@@ -562,7 +552,7 @@ void playerUpdate() {
 		}
 
 		// Check if the player grabs some trash
-		if (juKeyboardGetKeyPressed(SDL_SCANCODE_LSHIFT)) {
+		if (juKeyboardGetKeyPressed(SDL_SCANCODE_SPACE)) {
 			for (int i = 0; i < gPopulation.size && gPlayer.player.grabbedTrash == NO_TRASH; i++) {
 				if (gPopulation.entities[i].type == ENTITY_TYPE_TRASH &&
 					juPointDistance(gPlayer.physics.x, gPlayer.physics.y, gPopulation.entities[i].physics.x,
@@ -571,7 +561,7 @@ void playerUpdate() {
 					gPopulation.entities[i].trash.grabbed = true;
 				}
 			}
-		} else if (juKeyboardGetKeyReleased(SDL_SCANCODE_LSHIFT) && gPlayer.player.grabbedTrash != NO_TRASH) {
+		} else if (juKeyboardGetKeyReleased(SDL_SCANCODE_SPACE) && gPlayer.player.grabbedTrash != NO_TRASH) {
 			Entity *trash = &gPopulation.entities[gPlayer.player.grabbedTrash];
 			trash->physics.velocity.direction = gPlayer.player.direction;
 			trash->physics.velocity.magnitude = PLAYER_BASE_TRASH_THROW_SPEED;
@@ -601,7 +591,7 @@ void playerUpdate() {
 
 void playerDraw() {
 	VK2DTexture player;
-	if (juKeyboardGetKey(SDL_SCANCODE_SPACE))
+	if (juKeyboardGetKey(SDL_SCANCODE_W))
 		player = gAssets->texPlayerThruster;
 	else
 		player = gAssets->texPlayer;
@@ -899,6 +889,7 @@ int main() {
 		while (SDL_PollEvent(&e)) {
 			if (e.type == SDL_QUIT) {
 				stopRunning = true;
+				abort();
 			}
 		}
 
@@ -939,6 +930,7 @@ int main() {
 				gameStart();
 			} else if (state == GAMESTATE_QUIT){
 				stopRunning = true;
+				abort();
 				gameEnd();
 			}
 		} else if (state == GAMESTATE_GAME) {
@@ -948,6 +940,7 @@ int main() {
 				menuStart();
 			} else if (state == GAMESTATE_QUIT){
 				stopRunning = true;
+				abort();
 				gameEnd();
 			}
 		}
